@@ -962,4 +962,4 @@ async def media_guard(client: Client, message: Message):
 # -------------------------------------------------
 if __name__ == "__main__":
     log.info("NSFW Guard Bot is starting...")
-    app.run()    මට මෙ කොඩ් එකෙ ස්ටර්ට් මැසෙජ් එකට  https://i.ibb.co/WNzKw5qk/DLKNSFWCleaner.png මෙ ඉමෙජ් එක දලා හදලා දෙන්න
+    app.run()
