@@ -52,8 +52,7 @@ START_PHOTO_URL = "https://i.ibb.co/WNzKw5qk/DLKNSFWCleaner.png"
 
 DEV_ABOUT_TEXT = (
     "DLK DEVELOPER\n"
-    "Telegram Bot Developer & Music Producer\n"
-    "Channel: @DLKDevelopers"
+    "SEE THE FUTURE THROUGH MY VISION"
 )
 
 # -------------------------------------------------
@@ -446,13 +445,11 @@ def get_how_text() -> str:
 def get_features_text() -> str:
     return (
         "🛠 <b>Features</b>\n\n"
-        "• AI-based Nude/NSFW detection\n"
         "• Works on stickers, photos, GIFs, videos\n"
         "• Silently deletes explicit content\n"
         "• Per-chat sticker whitelist with /free\n"
         "• Sticker pack blacklist per chat\n"
         f"• Auto-mute after <code>{NSFW_STICKER_LIMIT}</code> NSFW stickers\n"
-        "• Logs to your private log channel (optional)\n"
     )
 
 
@@ -472,7 +469,6 @@ def get_about_text() -> str:
     return (
         "ℹ️ <b>About DLK NSFW Cleaner</b>\n\n"
         "This bot automatically detects and removes nude / explicit NSFW content "
-        "using an AI model (NudeNet).\n\n"
         "If a sticker in a pack is NSFW, the whole pack is blacklisted for that chat.\n"
         f"If a user keeps sending NSFW stickers more than <code>{NSFW_STICKER_LIMIT}</code> times, "
         "the bot will try to mute them (if it has permission).\n\n"
@@ -639,19 +635,6 @@ async def start_cmd(client: Client, message: Message):
         caption=main_text,
         reply_markup=keyboard,
     )
-    else:
-        # Group / topic group – short intro
-        text = (
-            "✅ <b>DLK NSFW Cleaner is active in this chat.</b>\n\n"
-            "I silently delete explicit NSFW stickers/photos/videos.\n"
-            f"If a user sends more than <code>{NSFW_STICKER_LIMIT}</code> NSFW stickers, "
-            "I will try to mute them (if I have permission).\n\n"
-            "Use the buttons below to see how I work."
-        )
-        await message.reply_text(
-            text,
-            reply_markup=keyboard,
-        )
 
 
 # /help → same menu (no separate help text)
