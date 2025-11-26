@@ -1,0 +1,10 @@
+pyrogram==2.2.6
+tgcrypto
+python-dotenv
+pymongo
+nudenet==3.4.2
+opencv-python
+pillow
+requests
+lottie
+ffmpeg-python
