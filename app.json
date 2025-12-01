@@ -1,0 +1,55 @@
+{
+  "name": "dlk-nsfw-guard",
+  "description": "DLK NSFW Cleaner - Telegram bot (Pyrogram). Deploy scaffold for Heroku.",
+  "repository": "https://github.com/yourusername/your-repo",
+  "keywords": ["telegram", "pyrogram", "bot", "nsfw", "nudenet"],
+  "stack": "heroku-20",
+  "buildpacks": [
+    { "url": "https://github.com/heroku/heroku-buildpack-apt" },
+    { "url": "heroku/python" }
+  ],
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID (integer)",
+      "value": ""
+    },
+    "API_HASH": {
+      "description": "Telegram API HASH",
+      "value": ""
+    },
+    "BOT_TOKEN": {
+      "description": "Bot token from BotFather",
+      "value": ""
+    },
+    "MONGO_URI": {
+      "description": "MongoDB connection string (e.g. Atlas). Provide externally; do NOT store creds in repo.",
+      "value": ""
+    },
+    "NSFW_THRESHOLD": {
+      "description": "threshold 0.0-1.0 (default 0.75)",
+      "value": "0.75"
+    },
+    "NSFW_STICKER_LIMIT": {
+      "description": "how many NSFW stickers allowed before mute (default 3)",
+      "value": "3"
+    },
+    "MUTE_DURATION_SECONDS": {
+      "description": "mute duration in seconds (default 86400 = 1 day)",
+      "value": "86400"
+    },
+    "LOG_CHAT_ID": {
+      "description": "optional: chat id or @username for logs",
+      "value": ""
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "standard-1X"
+    }
+  },
+  "addons": [],
+  "scripts": {
+    "postdeploy": "echo 'Deployed DLK NSFW Cleaner — configure env vars in Heroku dashboard (API_ID, API_HASH, BOT_TOKEN, MONGO_URI) and scale worker.'"
+  }
+}
