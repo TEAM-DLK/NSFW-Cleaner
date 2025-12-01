@@ -1,55 +1,47 @@
 {
-  "name": "dlk-nsfw-guard",
-  "description": "DLK NSFW Cleaner - Telegram bot (Pyrogram). Deploy scaffold for Heroku.",
-  "repository": "https://github.com/yourusername/your-repo",
-  "keywords": ["telegram", "pyrogram", "bot", "nsfw", "nudenet"],
-  "stack": "heroku-20",
-  "buildpacks": [
-    { "url": "https://github.com/heroku/heroku-buildpack-apt" },
-    { "url": "heroku/python" }
-  ],
+  "name": "NSFW Guard Bot",
+  "description": "A Telegram NSFW guard bot using Pyrogram and NudeNet",
+  "repository": "https://github.com/yourusername/yourrepo",
+  "keywords": ["telegram", "bot", "nsfw", "pyrogram", "heroku"],
   "env": {
     "API_ID": {
-      "description": "Telegram API ID (integer)",
-      "value": ""
+      "description": "Get this from https://my.telegram.org/apps",
+      "required": true
     },
     "API_HASH": {
-      "description": "Telegram API HASH",
-      "value": ""
+      "description": "Get this from https://my.telegram.org/apps",
+      "required": true
     },
     "BOT_TOKEN": {
-      "description": "Bot token from BotFather",
-      "value": ""
+      "description": "Your Telegram bot token from @BotFather",
+      "required": true
     },
     "MONGO_URI": {
-      "description": "MongoDB connection string (e.g. Atlas). Provide externally; do NOT store creds in repo.",
-      "value": ""
+      "description": "Your MongoDB connection URI",
+      "required": true
     },
     "NSFW_THRESHOLD": {
-      "description": "threshold 0.0-1.0 (default 0.75)",
-      "value": "0.75"
+      "description": "Threshold for NSFW detection (default 0.75)",
+      "required": false
     },
     "NSFW_STICKER_LIMIT": {
-      "description": "how many NSFW stickers allowed before mute (default 3)",
-      "value": "3"
+      "description": "Number of NSFW stickers before mute (default 3)",
+      "required": false
     },
     "MUTE_DURATION_SECONDS": {
-      "description": "mute duration in seconds (default 86400 = 1 day)",
-      "value": "86400"
+      "description": "Mute duration in seconds (default 86400 = 1 day)",
+      "required": false
     },
     "LOG_CHAT_ID": {
-      "description": "optional: chat id or @username for logs",
-      "value": ""
+      "description": "Telegram Chat ID for admin logs",
+      "required": false
     }
   },
   "formation": {
     "worker": {
       "quantity": 1,
-      "size": "standard-1X"
+      "size": "free"
     }
   },
-  "addons": [],
-  "scripts": {
-    "postdeploy": "echo 'Deployed DLK NSFW Cleaner — configure env vars in Heroku dashboard (API_ID, API_HASH, BOT_TOKEN, MONGO_URI) and scale worker.'"
-  }
+  "image": "heroku/python"
 }
