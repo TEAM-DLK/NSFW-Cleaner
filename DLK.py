@@ -1,4 +1,3 @@
-```python
 # Full NSFW guard bot (fixed for topics/forums, safer media handling, and bug fixes)
 # - Fixes "NoneType object has no attribute 'shape'" by validating & converting media before calling NudeDetector
 # - Makes detector usage resilient to exceptions (won't crash the handler)
@@ -1531,4 +1530,3 @@ async def callback_handler(client: Client, query: CallbackQuery):
 if __name__ == "__main__":
     log.info("Starting NSFW Guard bot...")
     app.run()
-```
