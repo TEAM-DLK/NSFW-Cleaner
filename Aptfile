@@ -1,4 +1,6 @@
 libwebp-dev
 libwebpmux3
 libwebpdemux2
-libwebp6
+libjpeg-dev
+zlib1g-dev
+libpng-dev
