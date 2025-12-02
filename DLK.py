@@ -1045,7 +1045,7 @@ async def unfree_cmd(client: Client, message: Message):
         )
         try:
             grp = await message.reply_text(
-                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, confirm in my private chat.",
+                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, confirm the action in my private chat.",
                 reply_markup=kb,
                 quote=True,
             )
@@ -1119,8 +1119,8 @@ async def private_sticker_collector(client: Client, message: Message):
             file_unique_id = st.file_unique_id
             set_name = getattr(st, "set_name", None) or ""
             update_pending_action(str(pending_free["_id"]), {"file_unique_id": file_unique_id, "set_name": set_name})
-            pending = get_pending_action(str(pending_free["_id"]))
-            pending_id = str(pending["_id"])
+            pending = get_pending_action(str(pending_free["_1"]))
+            pending_id = str(pending_free["_id"])
             confirm_kb_pm = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("✅ Confirm whitelist", callback_data=f"free_confirm:{pending_id}"),
                   InlineKeyboardButton("❌ Cancel", callback_data=f"free_cancel:{pending_id}")]]
@@ -1128,7 +1128,7 @@ async def private_sticker_collector(client: Client, message: Message):
             try:
                 # copy the sticker back into admin's PM so they see preview
                 copied = await safe_copy_message(client, user.id, message.chat.id, getattr(message, "message_id", getattr(message, "id", None)))
-                pm_text = await client.send_message(user.id, f"Sticker received for chat <code>{pending['chat_id']}</code>. Press Confirm to whitelist.", reply_markup=confirm_kb_pm)
+                pm_text = await client.send_message(user.id, f"Sticker received for chat <code>{pending_free['chat_id']}</code>. Press Confirm to whitelist.", reply_markup=confirm_kb_pm)
                 if copied:
                     asyncio.create_task(schedule_delete(copied, CONFIRM_MSG_DELETE_SECONDS))
                 asyncio.create_task(schedule_delete(pm_text, CONFIRM_MSG_DELETE_SECONDS))
@@ -1507,15 +1507,19 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 can_pin_messages=False,
             )
             try:
-                await client.restrict_chat_member(target_chat, target_user, permissions=permissions, until_date=0)
-                await query.edit_message_text(f"🔈 User <a href='tg://user?id={target_user}'>user</a> has been unmuted in chat <code>{target_chat}</code>.")
+                # IMPORTANT: to unmute a user we set their permissions back to allowed.
+                # Passing until_date=0 previously could be interpreted oddly; using default (None)
+                # and explicit permissions is more reliable across Pyrogram/Telegram versions.
+                await client.restrict_chat_member(target_chat, target_user, permissions=permissions)
+                # edit response message (use HTML parse mode for tg:// link)
+                await query.edit_message_text(f"🔈 User <a href='tg://user?id={target_user}'>user</a> has been unmuted in chat <code>{target_chat}</code>.", parse_mode="html")
                 await query.answer("User unmuted.")
             except Exception as e:
                 await query.answer(f"Failed to unmute: {e}", show_alert=True)
         elif action == "ban":
             try:
                 await client.ban_chat_member(target_chat, target_user)
-                await query.edit_message_text(f"⛔ User <a href='tg://user?id={target_user}'>user</a> has been banned from chat <code>{target_chat}</code>.")
+                await query.edit_message_text(f"⛔ User <a href='tg://user?id={target_user}'>user</a> has been banned from chat <code>{target_chat}</code>.", parse_mode="html")
                 await query.answer("User banned.")
             except Exception as e:
                 await query.answer(f"Failed to ban: {e}", show_alert=True)
