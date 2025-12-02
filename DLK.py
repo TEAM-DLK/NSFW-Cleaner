@@ -4,6 +4,7 @@ import logging
 import tempfile
 import shutil
 import subprocess
+import asyncio
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -35,6 +36,9 @@ NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.75"))
 NSFW_STICKER_LIMIT = int(os.getenv("NSFW_STICKER_LIMIT", "3"))
 # mute duration in seconds (default: 1 day)
 MUTE_DURATION_SECONDS = int(os.getenv("MUTE_DURATION_SECONDS", "86400"))
+
+# how long the bot's PM/group helper messages should live before auto-delete (seconds)
+CONFIRM_MSG_DELETE_SECONDS = int(os.getenv("CONFIRM_MSG_DELETE_SECONDS", "10"))
 
 MONGO_URI = os.getenv("MONGO_URI", "").strip()
 if not MONGO_URI:
@@ -173,7 +177,7 @@ def get_violation_count(chat_id: int, user_id: int) -> int:
     return int(doc.get("count", 0)) if doc else 0
 
 
-# --- pending whitelists / actions (temporary, used for confirm buttons in bot private chat) ---
+# --- pending actions (temporary, used for confirm buttons in bot private chat) ---
 pending_col = db["pending_whitelists"]
 # Optional: automatically expire pending requests after 1 hour
 try:
@@ -463,6 +467,21 @@ async def delete_nsfw_message(client: Client, message: Message, score: float):
             log.warning(f"Failed to send log message: {e}")
 
 
+async def schedule_delete(msg: Message, delay: int):
+    """
+    Delete a message after `delay` seconds. Safe wrapper.
+    """
+    try:
+        await asyncio.sleep(delay)
+        try:
+            await msg.delete()
+        except Exception:
+            # sometimes message already deleted
+            pass
+    except Exception as e:
+        log.debug(f"schedule_delete error: {e}")
+
+
 def format_uptime(seconds: int) -> str:
     m, s = divmod(seconds, 60)
     h, m = divmod(m, 60)
@@ -530,8 +549,8 @@ def get_how_text() -> str:
         f"   • If a user sends more than <code>{NSFW_STICKER_LIMIT}</code> NSFW stickers, "
         "I will try to mute them.\n\n"
         "Admins can whitelist specific stickers per-chat using /free (reply to a sticker). "
-        "When you use /free, the bot will create a confirmation flow — use the private confirmation "
-        "button to finalize. This whitelist is per-chat only and will prevent that sticker from being deleted in this chat."
+        "When you use /free, I copy that sticker to your private chat with a confirm button. "
+        f"Helper messages auto-delete after <code>{CONFIRM_MSG_DELETE_SECONDS}</code> seconds to avoid clutter."
     )
 
 
@@ -609,19 +628,14 @@ async def edit_main_message(msg: Message, text: str, keyboard: InlineKeyboardMar
 
 # -------------------------------------------------
 # Violation handling (mute after limit)
+# (unchanged - omitted comment)
 # -------------------------------------------------
 async def handle_nsfw_sticker_violation(client: Client, message: Message, score: float):
-    """
-    Called when a NSFW sticker is deleted.
-    - Increments user's NSFW sticker violation count.
-    - If count > NSFW_STICKER_LIMIT -> try to mute user (if bot has permission).
-    """
     chat_id = message.chat.id
     user = message.from_user
     if not user:
         return
 
-    # Don't mute admins/owners
     if await is_user_admin(client, chat_id, user.id):
         log.info(
             f"[VIOLATION] User {user.id} is admin/owner, not muting. (chat={chat_id})"
@@ -634,7 +648,6 @@ async def handle_nsfw_sticker_violation(client: Client, message: Message, score:
         f"count={new_count}, limit={NSFW_STICKER_LIMIT}"
     )
 
-    # තුණට වඩා ( > ) mute
     if new_count <= NSFW_STICKER_LIMIT:
         return
 
@@ -670,7 +683,6 @@ async def handle_nsfw_sticker_violation(client: Client, message: Message, score:
             f"Duration={MUTE_DURATION_SECONDS}s"
         )
 
-        # Notice in group + button to your log channel
         try:
             kb = InlineKeyboardMarkup(
                 [
@@ -690,7 +702,6 @@ async def handle_nsfw_sticker_violation(client: Client, message: Message, score:
         except Exception:
             pass
 
-        # Optional log chat
         if LOG_CHAT_ID:
             try:
                 await client.send_message(
@@ -838,8 +849,10 @@ async def free_cmd(client: Client, message: Message):
     /free
     Admin-only.
     Must be used as reply to a sticker message.
-    Creates a pending whitelist action and posts an inline button in the group
-    that opens a private chat with bot (deep-link). Admin confirms in private.
+    Copies that sticker to admin's private chat with Confirm/Cancel buttons.
+    The helper messages (in PM and group notice) are auto-deleted after CONFIRM_MSG_DELETE_SECONDS to avoid clutter.
+    If the admin cannot be messaged directly (didn't start bot), a deep-link button is posted in the group:
+    clicking it opens bot PM with /start free_<pending_id> to confirm.
     """
     chat_id = message.chat.id
     user = message.from_user
@@ -864,43 +877,41 @@ async def free_cmd(client: Client, message: Message):
             )
         return
 
-    sticker = message.reply_to_message.sticker
-    file_unique_id = sticker.file_unique_id
-    set_name = getattr(sticker, "set_name", None) or ""
-
+    sticker_msg = message.reply_to_message
+    file_unique_id = sticker_msg.sticker.file_unique_id
+    set_name = getattr(sticker_msg.sticker, "set_name", None) or ""
     me = await client.get_me()
     bot_username = me.username or "NSFWGuardBot"
 
-    # Create a pending whitelist action
+    # Create pending whitelist action (kept in DB for up to 1 hour)
     pending_id = create_pending_action("whitelist", chat_id, user.id, file_unique_id, set_name)
 
-    # Inline button in group: deep-link to bot private with payload
+    # Group notice with deep-link (so admin can open PM and confirm)
     deep_link = f"https://t.me/{bot_username}?start=free_{pending_id}"
     confirm_kb_group = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton("✅ Confirm in private", url=deep_link),
-                InlineKeyboardButton("❌ Cancel (use PM)", callback_data=f"free_cancel_group:{pending_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"free_cancel_group:{pending_id}"),
             ]
         ]
     )
 
     try:
-        await message.reply_text(
-            "✅ Whitelist request created. Admin: please open the bot's private chat and confirm.\n"
+        group_notice = await message.reply_text(
+            "✅ Whitelist request created. Admin: please open my private chat and confirm.\n"
             "Click the button to open my private chat and confirm the whitelist.",
             reply_markup=confirm_kb_group,
             quote=True,
         )
+        # schedule deletion of this group helper message
+        asyncio.create_task(schedule_delete(group_notice, CONFIRM_MSG_DELETE_SECONDS))
     except Exception as e:
         log.warning(f"Failed to send group confirm button: {e}")
-        await message.reply_text(
-            "✅ Whitelist request created. Please start a private chat with the bot and use the /start link provided.",
-            quote=True,
-        )
 
-    # Try to proactively send private message (only works if user started the bot)
+    # Try to copy the sticker into admin's private chat and send confirm buttons there
     try:
+        pm_sticker_msg = await client.copy_message(user.id, message.chat.id, sticker_msg.message_id)
         confirm_kb_pm = InlineKeyboardMarkup(
             [
                 [
@@ -909,15 +920,18 @@ async def free_cmd(client: Client, message: Message):
                 ]
             ]
         )
-        await client.send_message(
+        pm_text = await client.send_message(
             user.id,
-            f"You're about to whitelist a sticker in chat <code>{chat_id}</code> ({message.chat.title or 'group'}).\n\n"
-            "Press Confirm to whitelist the sticker in that group (this is per-chat).",
+            f"You're about to whitelist a sticker in chat <code>{chat_id}</code> ({message.chat.title or 'group'}).\n\nPress Confirm to whitelist the sticker in that group (this is per-chat).",
             reply_markup=confirm_kb_pm,
         )
+        # schedule deletion of both the copied sticker and the helper text after delay
+        asyncio.create_task(schedule_delete(pm_sticker_msg, CONFIRM_MSG_DELETE_SECONDS))
+        asyncio.create_task(schedule_delete(pm_text, CONFIRM_MSG_DELETE_SECONDS))
     except Exception as e:
-        # cannot message user directly; they must click the group button to open PM with start payload
+        # cannot message admin directly (blocked / hasn't started bot)
         log.info(f"Could not send PM to admin {user.id}: {e}")
+        # group deep-link remains so admin can open PM and confirm
 
     if LOG_CHAT_ID:
         try:
@@ -937,6 +951,7 @@ async def unfree_cmd(client: Client, message: Message):
     Admin-only.
     Reply to a sticker to remove it from the chat whitelist.
     If that pack is blacklisted in this chat, offer to remove pack-blacklist via private confirmation.
+    Helper messages auto-delete after CONFIRM_MSG_DELETE_SECONDS.
     """
     chat_id = message.chat.id
     user = message.from_user
@@ -957,7 +972,7 @@ async def unfree_cmd(client: Client, message: Message):
     remove_sticker_whitelist(chat_id, file_unique_id)
     await message.reply_text("✅ This sticker has been removed from the chat whitelist (if it was whitelisted).", quote=True)
 
-    # If the pack is blacklisted for this chat, offer unblacklist confirmation
+    # If the pack is blacklisted for this chat, offer unblacklist confirmation (deep-link)
     if set_name and is_pack_blacklisted(chat_id, set_name):
         me = await client.get_me()
         bot_username = me.username or "NSFWGuardBot"
@@ -971,11 +986,15 @@ async def unfree_cmd(client: Client, message: Message):
                 ]
             ]
         )
-        await message.reply_text(
-            f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, click the button and confirm in my private chat.",
-            reply_markup=kb,
-            quote=True,
-        )
+        try:
+            grp = await message.reply_text(
+                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, click the button and confirm in my private chat.",
+                reply_markup=kb,
+                quote=True,
+            )
+            asyncio.create_task(schedule_delete(grp, CONFIRM_MSG_DELETE_SECONDS))
+        except Exception:
+            pass
 
     if LOG_CHAT_ID:
         try:
@@ -1038,7 +1057,7 @@ async def callback_handler(client: Client, callback_query):
             except Exception:
                 pass
 
-            # Optionally notify the group that admin whitelisted (non-spammy)
+            # Notify the group that admin whitelisted (non-spammy)
             try:
                 await client.send_message(
                     chat_id,
@@ -1246,6 +1265,7 @@ async def callback_handler(client: Client, callback_query):
 
 # -------------------------------------------------
 # Main filter handler (stickers, photos, videos, GIFs)
+# (unchanged from previous behavior)
 # -------------------------------------------------
 @app.on_message(
     filters.group
