@@ -1,3 +1,5 @@
+මෙ වගෙ එවාට කියන්නෙ මොකක්ද
+
 import os
 import time
 import logging
@@ -175,62 +177,62 @@ detector = NudeDetector()
 
 # Only these labels are considered explicit NSFW
 EXPLICIT_LABELS = {
-"SEX_WORK", "PROSTITUTION", "ESCORT_SERVICE", "ADULT_ENTERTAINMENT", "SEX_TRADE",
+    # Genitalia Exposure
+    "FEMALE_GENITALIA_EXPOSED",
+    "MALE_GENITALIA_EXPOSED",
+    "GENITALIA_EXPOSED",
+    "ANUS_EXPOSED",
 
+    # Breast / Chest Exposure
+    "FEMALE_BREAST_EXPOSED",
+    "FEMALE_NIPPLE_EXPOSED",
+    "BREAST_EXPOSED",
+    "NUDE_FEMALE_CHEST",
+    "NUDE_MALE_CHEST",  # If you want to block male chest also
+    "MALE_BREAST_EXPOSED",
 
-# Model / dataset specific labels (common across many sources)
-"OPENNSFW_ADULT", "OPENNSFW_PORN", "OPENNSFW_SEXY", "NUDENET_NUDE", "NUDENET_PARTIAL",
-"NUDENET_EXPLICIT", "CLARIFAI_SEXUAL_CONTENT", "GOOGLE_SAFETY_EXPLICIT", "YAHOO_NSFW",
+    # Buttocks Exposure
+    "BUTTOCKS_EXPOSED",
+    "FEMALE_BUTTOCKS_EXPOSED",
+    "MALE_BUTTOCKS_EXPOSED",
 
+    # Sexual Activity
+    "SEXUAL_ACTIVITY",
+    "SEX_ACT",
+    "SEXUAL_INTERCOURSE",
+    "MASTURBATION",
+    "ORAL_SEX",
+    "ANAL_SEX",
 
-# Sexual paraphernalia and props
-"STRIP_POLE", "SEX_DOLL", "SEX_WORKER_COSTUME", "LINGERIE_MASK", "BONDAGE_RESTRAINT",
+    # Pornographic Content
+    "PORNOGRAPHIC",
+    "SEXUALIZED_NUDITY",
+    "EXPLICIT_NUDITY",
+    "ADULT_CONTENT",
 
+    # Suggestive Content
+    "PARTIALLY_NUDE",
+    "LINGERIE",
+    "BIKINI",
+    "SEXY_POSE",
+    "SEXUAL_INTENT",
 
-# Erotic gestures / actions
-"KISSING_TONGUE", "FRENCH_KISS", "HUMAN_SEXUAL_TOUCH", "SEXUAL_CONTACT",
+    # Child Safety (Extremely Important)
+    "MINOR_NUDITY",
+    "CHILD_NUDITY",
+    "CSAM_SUSPECT",  # Child sexual abuse material (must hard-block)
 
-
-# Implied sexual intent
-"SEXUAL_INTENT", "SEXUALIZED_BEHAVIOR", "LEWD_CONTENT", "OBSCENE_CONTENT",
-
-
-# Explicit descriptors seen in moderation labels
-"EXPLICIT_NUDITY", "SEXUALIZED_NUDITY", "NUDITY", "FULL_NUDE", "PARTIAL_NUDE",
-
-
-# Performance categories
-"STRIPPER", "EXOTIC_DANCER", "ADULT_PERFORMANCE", "LIVE_SEX_SHOW",
-
-
-# Sexual marketing / ads
-"ADULT_ADVERTISEMENT", "SEXUAL_AD", "CAM_SITE_AD", "PORN_SITE_LINK",
-
-
-# Other sexual content terms
-"SEXUAL_POSITION", "MISSIONARY_POSITION_EXPOSED", "DOGGY_STYLE_EXPOSED", "REVERSE_COWGIRL_EXPOSED",
-"ORAL_GIVING", "ORAL_RECEIVING",
-
-
-# Nudity with context tags
-"NUDITY_POOL", "NUDITY_BEACH", "NUDITY_BEDROOM", "NUDITY_SHOWER", "NUDITY_CAMERA",
-
-
-# Medical / surgical nudity (still sensitive)
-"MEDICAL_NUDITY", "SURGICAL_EXPOSURE", "INTIMATE_MEDICAL_IMAGE",
-
-
-# Implicit sexual content
-"IMPLICIT_SEXUALITY", "SUGGESTIVE_CLOTHING", "UNDERWEAR_EXPOSED",
-
-
-# Porn categories and genres
-"AMATEUR_PORN", "PROFESSIONAL_PORN", "VR_PORN", "SHEMALE_PORN", "TRANS_PORN",
-"LESBIAN_PORN", "GAY_PORN", "STRAIGHT_PORN",
-
-
-# Auto-generated variants to reach coverage (sensible synonyms)
+    # Other Explicit / NSFW Flags
+    "HARDCORE",
+    "SOFTCORE",
+    "LEWD_CONTENT",
+    "OBSCENE_CONTENT",
+    "INAPPROPRIATE_CONTENT",
+    "ADULT_TOY",
+    "SEX_TOY",
+    "FETISH_CONTENT",
 }
+
 
 
 # -------------------------------------------------
