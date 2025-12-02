@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import time
 import logging
@@ -24,7 +27,7 @@ from nudenet import NudeDetector
 # -------------------------------------------------
 load_dotenv()
 
-API_ID = int(os.getenv("API_ID", ""))
+API_ID = int(os.getenv("API_ID", "0") or 0)
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -208,19 +211,10 @@ EXPLICIT_LABELS = {
     "EXPLICIT_NUDITY",
     "ADULT_CONTENT",
 
-    # Suggestive Content
-    "PARTIALLY_NUDE",
-    "LINGERIE",
-    "BIKINI",
-    "SEXY_POSE",
-    "SEXUAL_INTENT",
-
-    # Child Safety (Extremely Important)
+    # Other Explicit / NSFW Flags
     "MINOR_NUDITY",
     "CHILD_NUDITY",
     "CSAM_SUSPECT",  # Child sexual abuse material (must hard-block)
-
-    # Other Explicit / NSFW Flags
     "HARDCORE",
     "SOFTCORE",
     "LEWD_CONTENT",
@@ -231,7 +225,21 @@ EXPLICIT_LABELS = {
     "FETISH_CONTENT",
 }
 
-
+# New: treat suggestive/romantic non-nude actions as a separate set.
+SUGGESTIVE_LABELS = {
+    "KISSING",
+    "HUG",
+    "HUGGING",
+    "EMBRACE",
+    "HOLDING_HANDS",
+    "ROMANTIC",
+    "SEXY_POSE",
+    "SUGGESTIVE",
+    "SEXUAL_INTENT",
+    "PARTIALLY_NUDE",
+    "LINGERIE",
+    "BIKINI",
+}
 
 # -------------------------------------------------
 # Helpers
@@ -357,7 +365,10 @@ def convert_tgs_to_png(tgs_path: str, out_path: str) -> str | None:
 def scan_images_for_nsfw(image_paths: list[str]) -> float:
     """
     Scan a list of image paths with NudeNet NudeDetector.
-    Only EXPLICIT_LABELS are counted as NSFW.
+    Returns a 'score' where higher means more explicit.
+    - Any EXPLICIT_LABELS with score contributes normally.
+    - Any SUGGESTIVE_LABELS are mapped to a minimum score so they can be
+      treated as hits (so kissing/hugging/etc gets flagged).
     """
     if not image_paths:
         return 0.0
@@ -367,18 +378,32 @@ def scan_images_for_nsfw(image_paths: list[str]) -> float:
     for path in image_paths:
         try:
             detections = detector.detect(path)
-            log.info(f"[DETECT] {path} -> {detections}")
+            log.info(f"[DETECT-RAW] {path} -> {detections}")
 
             for det in detections:
                 label = str(det.get("class", "")).upper()
                 score = float(det.get("score", 0.0))
 
+                # Explicit labels: count as usual
                 if label in EXPLICIT_LABELS:
                     log.info(f"[DETECT] EXPLICIT HIT label={label}, score={score:.2f}")
                     if score > max_score:
                         max_score = score
+
+                # Suggestive labels: map to a baseline so they can trigger deletion
+                elif label in SUGGESTIVE_LABELS:
+                    # Map suggestive detections to at least this baseline.
+                    # tweak baseline as needed (0.20, 0.30, etc.)
+                    min_suggestive_score = max(score, 0.20)
+                    log.info(
+                        f"[DETECT] SUGGESTIVE HIT label={label}, score={score:.2f}, "
+                        f"mapped={min_suggestive_score:.2f}"
+                    )
+                    if min_suggestive_score > max_score:
+                        max_score = min_suggestive_score
+
                 else:
-                    log.debug(f"[DETECT] Ignoring non-explicit label={label}, score={score:.2f}")
+                    log.debug(f"[DETECT] Ignoring other label={label}, score={score:.2f}")
         except Exception as e:
             log.warning(f"Scanning failed for {path}: {e}")
             continue
@@ -589,7 +614,7 @@ async def handle_nsfw_sticker_violation(client: Client, message: Message, score:
         f"count={new_count}, limit={NSFW_STICKER_LIMIT}"
     )
 
-    # තුණට වඩා ( > ) mute
+    # mute only after exceeding limit (> )
     if new_count <= NSFW_STICKER_LIMIT:
         return
 
