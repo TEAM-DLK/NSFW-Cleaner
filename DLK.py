@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
 import time
 import logging
@@ -27,7 +24,7 @@ from nudenet import NudeDetector
 # -------------------------------------------------
 load_dotenv()
 
-API_ID = int(os.getenv("API_ID", "0") or 0)
+API_ID = int(os.getenv("API_ID", ""))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
@@ -178,23 +175,6 @@ detector = NudeDetector()
 
 # Only these labels are considered explicit NSFW
 EXPLICIT_LABELS = {
-    # Core nudity / genitalia
-# Child/minor indicators (must always block + report)
-"MINOR_NUDITY", "CHILD_NUDITY", "CHILD_SEXUAL_ACTIVITY", "UNDERAGE_SEXUALIZED",
-"CSAM_SUSPECT", "CHILD_EXPLOITATION", "POSSIBLE_CSAM", "YOUTH_NUDITY",
-
-
-# Sexual language / slang used in models and filters
-"BLOWJOB_SLANG", "SUCK", "SUCKING", "TITS", "BOOBS", "PUSSY", "COCK", "DICK",
-"ASSHOLE", "FUCKING", "FUCKED", "GETTING_FUCKED", "NAKED", "NAKED_UPPER_BODY",
-
-
-# Graphic sexual content
-"GRAPHIC_SEXUAL_CONTENT", "SEXUAL_VIOLENCE", "RAPE_SCENE", "NON_CONSENSUAL_SEX",
-"SEXUAL_ASSAULT", "EXPLOITIVE_SEXUAL_CONTENT", "LASCIVIOUS_DISPLAY",
-
-
-# Commercial / industry labels
 "SEX_WORK", "PROSTITUTION", "ESCORT_SERVICE", "ADULT_ENTERTAINMENT", "SEX_TRADE",
 
 
@@ -252,9 +232,6 @@ EXPLICIT_LABELS = {
 # Auto-generated variants to reach coverage (sensible synonyms)
 }
 
-# New: treat suggestive/romantic non-nude actions as a separate set.
-SUGGESTIVE_LABELS = {
-}
 
 # -------------------------------------------------
 # Helpers
@@ -380,10 +357,7 @@ def convert_tgs_to_png(tgs_path: str, out_path: str) -> str | None:
 def scan_images_for_nsfw(image_paths: list[str]) -> float:
     """
     Scan a list of image paths with NudeNet NudeDetector.
-    Returns a 'score' where higher means more explicit.
-    - Any EXPLICIT_LABELS with score contributes normally.
-    - Any SUGGESTIVE_LABELS are mapped to a minimum score so they can be
-      treated as hits (so kissing/hugging/etc gets flagged).
+    Only EXPLICIT_LABELS are counted as NSFW.
     """
     if not image_paths:
         return 0.0
@@ -393,32 +367,18 @@ def scan_images_for_nsfw(image_paths: list[str]) -> float:
     for path in image_paths:
         try:
             detections = detector.detect(path)
-            log.info(f"[DETECT-RAW] {path} -> {detections}")
+            log.info(f"[DETECT] {path} -> {detections}")
 
             for det in detections:
                 label = str(det.get("class", "")).upper()
                 score = float(det.get("score", 0.0))
 
-                # Explicit labels: count as usual
                 if label in EXPLICIT_LABELS:
                     log.info(f"[DETECT] EXPLICIT HIT label={label}, score={score:.2f}")
                     if score > max_score:
                         max_score = score
-
-                # Suggestive labels: map to a baseline so they can trigger deletion
-                elif label in SUGGESTIVE_LABELS:
-                    # Map suggestive detections to at least this baseline.
-                    # tweak baseline as needed (0.20, 0.30, etc.)
-                    min_suggestive_score = max(score, 0.20)
-                    log.info(
-                        f"[DETECT] SUGGESTIVE HIT label={label}, score={score:.2f}, "
-                        f"mapped={min_suggestive_score:.2f}"
-                    )
-                    if min_suggestive_score > max_score:
-                        max_score = min_suggestive_score
-
                 else:
-                    log.debug(f"[DETECT] Ignoring other label={label}, score={score:.2f}")
+                    log.debug(f"[DETECT] Ignoring non-explicit label={label}, score={score:.2f}")
         except Exception as e:
             log.warning(f"Scanning failed for {path}: {e}")
             continue
@@ -629,7 +589,7 @@ async def handle_nsfw_sticker_violation(client: Client, message: Message, score:
         f"count={new_count}, limit={NSFW_STICKER_LIMIT}"
     )
 
-    # mute only after exceeding limit (> )
+    # තුණට වඩා ( > ) mute
     if new_count <= NSFW_STICKER_LIMIT:
         return
 
