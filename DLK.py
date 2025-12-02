@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from pymongo import MongoClient, ASCENDING
+from bson.objectid import ObjectId
 
 from pyrogram import Client, filters
 from pyrogram.types import (
@@ -65,7 +66,7 @@ logging.basicConfig(
 log = logging.getLogger("NSFW-GUARD")
 
 # -------------------------------------------------
-# MongoDB (sticker whitelist + PACK BLACKLIST + VIOLATIONS)
+# MongoDB (sticker whitelist + PACK BLACKLIST + VIOLATIONS + PENDING WHITELISTS)
 # -------------------------------------------------
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["nsfw_guard"]
@@ -86,7 +87,7 @@ def is_sticker_whitelisted(chat_id: int, file_unique_id: str) -> bool:
 def add_sticker_whitelist(chat_id: int, file_unique_id: str) -> None:
     whitelist_col.update_one(
         {"chat_id": chat_id, "file_unique_id": file_unique_id},
-        {"$set": {"chat_id": chat_id, "file_unique_id": file_unique_id}},
+        {"$set": {"chat_id": chat_id, "file_unique_id": file_unique_id, "ts": int(time.time())}},
         upsert=True,
     )
 
@@ -119,9 +120,20 @@ def add_pack_blacklist(chat_id: int, set_name: str) -> None:
         return
     pack_blacklist_col.update_one(
         {"chat_id": chat_id, "set_name": set_name},
-        {"$set": {"chat_id": chat_id, "set_name": set_name}},
+        {"$set": {"chat_id": chat_id, "set_name": set_name, "ts": int(time.time())}},
         upsert=True,
     )
+
+
+def remove_pack_blacklist(chat_id: int, set_name: str) -> None:
+    """
+    Remove a sticker pack blacklist entry for a specific chat.
+    This is used when an admin explicitly whitelists a sticker from that pack
+    for the chat: pack-level blacklist should no longer apply in that chat.
+    """
+    if not set_name:
+        return
+    pack_blacklist_col.delete_one({"chat_id": chat_id, "set_name": set_name})
 
 
 # --- NSFW sticker violations per-user ---
@@ -155,6 +167,41 @@ def increment_violation(chat_id: int, user_id: int) -> int:
 def get_violation_count(chat_id: int, user_id: int) -> int:
     doc = violations_col.find_one({"chat_id": chat_id, "user_id": user_id})
     return int(doc.get("count", 0)) if doc else 0
+
+
+# --- pending whitelists (temporary, used for confirm buttons in bot private chat) ---
+pending_col = db["pending_whitelists"]
+# Optional: automatically expire pending requests after 1 hour
+try:
+    pending_col.create_index("ts", expireAfterSeconds=3600)
+except Exception:
+    pass
+
+
+def create_pending_whitelist(chat_id: int, admin_user_id: int, file_unique_id: str, set_name: str | None) -> str:
+    doc = {
+        "chat_id": chat_id,
+        "admin_user_id": admin_user_id,
+        "file_unique_id": file_unique_id,
+        "set_name": set_name or "",
+        "ts": int(time.time()),
+    }
+    res = pending_col.insert_one(doc)
+    return str(res.inserted_id)
+
+
+def get_pending_whitelist(pending_id: str):
+    try:
+        return pending_col.find_one({"_id": ObjectId(pending_id)})
+    except Exception:
+        return None
+
+
+def delete_pending_whitelist(pending_id: str):
+    try:
+        pending_col.delete_one({"_id": ObjectId(pending_id)})
+    except Exception:
+        pass
 
 
 # -------------------------------------------------
@@ -452,8 +499,7 @@ def get_main_text() -> str:
     uptime = format_uptime(int(time.time() - START_TIME))
     return (
         "🛡 <b>DLK NSFW Cleaner</b>\n"
-        "Keep your Telegram groups clean from nude / explicit content.\n\n"
-        "• Auto-scan stickers, photos, GIFs & videos\n"
+        "Keep your Telegram groups clean from NSFW content.\n\n"
         "• Deletes explicit NSFW content silently\n"
         "• Blacklists whole NSFW sticker packs per chat\n"
         f"• Mutes users after <code>{NSFW_STICKER_LIMIT}</code> NSFW stickers\n\n"
@@ -470,10 +516,14 @@ def get_how_text() -> str:
         "   • Delete messages\n"
         "   • Ban/Restrict users\n\n"
         "3️⃣ That's it!\n"
-        "   • I will silently delete explicit NSFW stickers/photos/gifs/videos\n"
+        "   • I will silently delete 🔞 stickers/photos/gifs/videos\n"
         "   • If a sticker from a pack is NSFW, I blacklist that entire pack in that chat\n"
         f"   • If a user sends more than <code>{NSFW_STICKER_LIMIT}</code> NSFW stickers, "
-        "I will try to mute them.\n"
+        "I will try to mute them.\n\n"
+        "Admins can whitelist specific stickers per-chat using /free (reply to a sticker). "
+        "When you use /free, the bot will send you a private confirmation button — "
+        "use that to confirm the whitelist. This whitelist is per-chat only and will prevent "
+        "that sticker from being deleted in this chat."
     )
 
 
@@ -481,7 +531,7 @@ def get_features_text() -> str:
     return (
         "🛠 <b>Features</b>\n\n"
         "• Works on stickers, photos, GIFs, videos\n"
-        "• Silently deletes explicit content\n"
+        "• Silently deletes 🔞 content\n"
         "• Per-chat sticker whitelist with /free\n"
         "• Sticker pack blacklist per chat\n"
         f"• Auto-mute after <code>{NSFW_STICKER_LIMIT}</code> NSFW stickers\n"
@@ -503,7 +553,7 @@ def get_perms_text() -> str:
 def get_about_text() -> str:
     return (
         "ℹ️ <b>About DLK NSFW Cleaner</b>\n\n"
-        "This bot automatically detects and removes nude / explicit NSFW content "
+        "This bot automatically detects and removes 🔞 NSFW content "
         "If a sticker in a pack is NSFW, the whole pack is blacklisted for that chat.\n"
         f"If a user keeps sending NSFW stickers more than <code>{NSFW_STICKER_LIMIT}</code> times, "
         "the bot will try to mute them (if it has permission).\n\n"
@@ -728,7 +778,10 @@ async def free_cmd(client: Client, message: Message):
     /free
     Admin-only.
     Must be used as reply to a sticker message.
-    Whitelists that sticker in this chat.
+    Whitelists that sticker in this chat — but to avoid accidental whitelists,
+    we send a private confirmation button to the admin. When the admin clicks
+    confirm in the bot's inbox, the sticker is whitelisted for the chat and any
+    pack-blacklist entry for that pack in that chat is removed.
     """
     chat_id = message.chat.id
     user = message.from_user
@@ -755,23 +808,59 @@ async def free_cmd(client: Client, message: Message):
 
     sticker = message.reply_to_message.sticker
     file_unique_id = sticker.file_unique_id
+    set_name = getattr(sticker, "set_name", None) or ""
 
-    add_sticker_whitelist(chat_id, file_unique_id)
+    # Create a pending request and send admin a private confirmation button
+    pending_id = create_pending_whitelist(chat_id, user.id, file_unique_id, set_name)
 
-    confirm_text = (
-        "✅ This sticker has been whitelisted in this chat.\n"
-        "It will no longer be deleted by the NSFW filter.\n\n"
-        "Note: If the sticker's pack was already blacklisted due to other NSFW stickers, "
-        "pack blacklist still takes priority."
+    confirm_kb = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Confirm whitelist in this group",
+                    callback_data=f"free_confirm:{pending_id}",
+                ),
+                InlineKeyboardButton(
+                    "❌ Cancel",
+                    callback_data=f"free_cancel:{pending_id}",
+                ),
+            ]
+        ]
     )
-    await message.reply_text(confirm_text, quote=True)
+
+    sent_to_group_text = (
+        "✅ Request created. I have sent you a private message with a confirmation button. "
+        "Open your private chat with me and tap ✅ to confirm the whitelist."
+    )
+
+    try:
+        # Try to send private message to the admin
+        await client.send_message(
+            user.id,
+            f"You're about to whitelist a sticker for chat: <code>{chat_id}</code> ({message.chat.title or 'group'}).\n\n"
+            "Press Confirm to whitelist the sticker in that group. This whitelist is per-chat only — "
+            "it will prevent this sticker from being deleted in that chat. If a pack was blacklisted in the chat, "
+            "confirming this will remove the pack-blacklist for that chat so stickers from this pack won't be auto-deleted.\n\n"
+            f"Sticker file id: <code>{file_unique_id}</code>",
+            reply_markup=confirm_kb,
+        )
+        # Inform in group to check PM
+        await message.reply_text(sent_to_group_text, quote=True)
+    except Exception as e:
+        log.warning(f"Failed to send private message to admin {user.id}: {e}")
+        # If we cannot message the admin (blocked / hasn't started bot), instruct to start bot
+        await message.reply_text(
+            "✅ I couldn't send you a private message. Please start a private chat with me (@"
+            f"{(await client.get_me()).username}) and then press /free again.",
+            quote=True,
+        )
 
     if LOG_CHAT_ID:
         try:
             await client.send_message(
                 LOG_CHAT_ID,
-                f"✅ Sticker whitelisted by admin {user.mention} in chat <code>{chat_id}</code>.\n"
-                f"<code>{file_unique_id}</code>",
+                f"🛡 Whitelist requested by admin {user.mention} in chat <code>{chat_id}</code>.\n"
+                f"Sticker: <code>{file_unique_id}</code>\nPack: <code>{set_name}</code>"
             )
         except Exception as e:
             log.warning(f"Failed to send whitelist log message: {e}")
@@ -788,6 +877,93 @@ async def callback_handler(client: Client, callback_query):
         me = await client.get_me()
         bot_username = me.username or "NSFWGuardBot"
 
+        # Whitelist confirm flow
+        if data and data.startswith("free_confirm:"):
+            pending_id = data.split(":", 1)[1]
+            pending = get_pending_whitelist(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+
+            # Only the admin who created the request can confirm
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to confirm this request.", show_alert=True)
+                return
+
+            chat_id = int(pending["chat_id"])
+            file_unique_id = pending["file_unique_id"]
+            set_name = pending.get("set_name", "") or ""
+
+            # Add whitelist entry
+            add_sticker_whitelist(chat_id, file_unique_id)
+            # Remove pack blacklist for this chat (so pack won't auto-delete)
+            if set_name:
+                remove_pack_blacklist(chat_id, set_name)
+
+            delete_pending_whitelist(pending_id)
+
+            # Notify admin in private
+            try:
+                await callback_query.answer("Sticker whitelisted for the chat.", show_alert=False)
+                await callback_query.message.edit_text(
+                    "✅ Sticker has been whitelisted in the chat.\n"
+                    "Pack-level blacklist (if present) has been removed for that chat so stickers from this pack won't be auto-deleted.",
+                )
+            except Exception:
+                pass
+
+            # Optionally notify the group that admin whitelisted (non-spammy)
+            try:
+                await client.send_message(
+                    chat_id,
+                    f"✅ Sticker has been whitelisted by admin {callback_query.from_user.mention}. "
+                    "This sticker will no longer be deleted by the NSFW filter in this group.",
+                )
+            except Exception:
+                # Could fail if bot was removed etc.
+                pass
+
+            if LOG_CHAT_ID:
+                try:
+                    await client.send_message(
+                        LOG_CHAT_ID,
+                        f"✅ Sticker whitelisted by admin {callback_query.from_user.mention} in chat <code>{chat_id}</code>.\n"
+                        f"<code>{file_unique_id}</code>\nPack: <code>{set_name}</code>"
+                    )
+                except Exception:
+                    pass
+
+            return
+
+        if data and data.startswith("free_cancel:"):
+            pending_id = data.split(":", 1)[1]
+            pending = get_pending_whitelist(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+
+            # Only the admin who created the request can cancel
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to cancel this request.", show_alert=True)
+                return
+
+            delete_pending_whitelist(pending_id)
+            await callback_query.answer("Whitelist request cancelled.", show_alert=False)
+            try:
+                await callback_query.message.edit_text("❌ Whitelist request cancelled.")
+            except Exception:
+                pass
+            return
+
+        # Existing UI pages
         if data == "page_main":
             await callback_query.answer()
             await edit_main_message(
@@ -873,7 +1049,14 @@ async def media_guard(client: Client, message: Message):
             st = message.sticker
             set_name = getattr(st, "set_name", None)
 
-            # 1) PACK BLACKLIST
+            # 1) Sticker whitelist first — whitelisted stickers should NEVER be deleted in this chat
+            if is_sticker_whitelisted(chat_id, st.file_unique_id):
+                log.info(
+                    f"[MEDIA] Sticker is whitelisted (chat={chat_id}, file_unique_id={st.file_unique_id})"
+                )
+                return
+
+            # 2) PACK BLACKLIST next — if pack is blacklisted for this chat, delete without scan
             if set_name and is_pack_blacklisted(chat_id, set_name):
                 log.info(
                     f"[MEDIA] Sticker pack blacklisted (chat={chat_id}, set_name={set_name}). "
@@ -881,13 +1064,6 @@ async def media_guard(client: Client, message: Message):
                 )
                 await delete_nsfw_message(client, message, score=1.0)
                 await handle_nsfw_sticker_violation(client, message, score=1.0)
-                return
-
-            # 2) Sticker whitelist
-            if is_sticker_whitelisted(chat_id, st.file_unique_id):
-                log.info(
-                    f"[MEDIA] Sticker is whitelisted (chat={chat_id}, file_unique_id={st.file_unique_id})"
-                )
                 return
 
             file_path = await message.download(
