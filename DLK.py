@@ -1,12 +1,20 @@
-# full updated NSFW guard bot implementation (adjusted per user request)
-# - posts mute/log messages into the same chat (topic/private/public) instead of external LOG_CHAT_ID
-# - adds a "Close" button to log messages to remove the log message
-# - makes group log messages auto-delete after DELETE_LOG_MESSAGE_SECONDS (default 10s)
-# - replies in-group when muting now auto-delete after DELETE_LOG_MESSAGE_SECONDS
-# - keeps existing behavior for pack blacklists, whitelists, etc.
-# - works in group, public, private, and topic contexts (no behavior that assumes topic messages have a different chat id)
-# NOTE: This file expects a running MongoDB instance and working NudeNet model.
-# Make sure ffmpeg is installed for video -> frames extraction and pillow / lottie for conversions.
+```python
+# Full NSFW guard bot (fixed for topics/forums, safer media handling, and bug fixes)
+# - Fixes "NoneType object has no attribute 'shape'" by validating & converting media before calling NudeDetector
+# - Makes detector usage resilient to exceptions (won't crash the handler)
+# - Uses message_thread_id when replying/sending into forum topics so logs and confirmations appear in the same topic
+# - Avoids attribute errors by using safe getattr(...) for message_id and other attributes
+# - Fixes private sticker collector bugs (incorrect pending lookup) and robust copy_message usage
+# - Keeps behavior: per-chat whitelist, pack blacklists, auto-mute after limit, inline moderation buttons
+#
+# Requirements:
+#  - Python >= 3.8
+#  - pyrogram, tgcrypto, pymongo, python-dotenv, nudenet, pillow, lottie (optional), ffmpeg installed system-wide
+#  - A running MongoDB and .env configured with API_ID, API_HASH, BOT_TOKEN, MONGO_URI
+#
+# Deploy:
+#  - Replace this file in your bot project, install deps, set env vars, and run the bot.
+#  - Make the bot an admin (Delete messages + Restrict/Ban users) at main group level for topic/forum support.
 
 import os
 import time
@@ -32,7 +40,14 @@ from pyrogram.types import (
     CallbackQuery,
 )
 from pyrogram.enums import ChatMemberStatus
-from nudenet import NudeDetector
+
+# NudeNet can be noisy on import; import lazily when first used
+try:
+    from nudenet import NudeDetector
+except Exception:
+    NudeDetector = None
+
+from PIL import Image
 
 # -------------------------------------------------
 # Load environment
@@ -63,7 +78,7 @@ MONGO_URI = os.getenv("MONGO_URI", "").strip()
 if not MONGO_URI:
     raise SystemExit("MONGO_URI is not set in environment. Set it in your .env file.")
 
-# LOG_CHAT_ID left for backward-compat but by default we will post logs into the same chat where the event happened.
+# Optional external logging chat (kept for compatibility). The bot will prefer posting logs into the same chat/topic.
 LOG_CHAT_ID_ENV = os.getenv("LOG_CHAT_ID", "").strip()
 LOG_CHAT_ID = LOG_CHAT_ID_ENV if LOG_CHAT_ID_ENV else None
 
@@ -276,13 +291,24 @@ app = Client(
     bot_token=BOT_TOKEN,
 )
 
-# -------------------------------------------------
-# NSFW detector (NudeNet 3.x)
-# -------------------------------------------------
-log.info("Loading NudeNet detector (first run may download the model)...")
-detector = NudeDetector()
 
-# Only these labels are considered explicit NSFW
+# -------------------------------------------------
+# NSFW detector (lazy load)
+# -------------------------------------------------
+_detector_instance = None
+
+
+def get_detector():
+    global _detector_instance
+    if _detector_instance is None:
+        if NudeDetector is None:
+            raise RuntimeError("NudeDetector not available. Install nudenet package.")
+        log.info("Loading NudeNet detector (first run may download the model)...")
+        _detector_instance = NudeDetector()
+    return _detector_instance
+
+
+# Only these labels are considered explicit NSFW (same as before)
 EXPLICIT_LABELS = {
     "FEMALE_GENITALIA_EXPOSED",
     "MALE_GENITALIA_EXPOSED",
@@ -413,14 +439,50 @@ def convert_tgs_to_png(tgs_path: str, out_path: str) -> Optional[str]:
         return None
 
 
+def prepare_image_for_detector(src_path: str, out_dir: str) -> Optional[str]:
+    """
+    Ensure the detector receives a readable image:
+    - If src_path is an image, try to open with PIL and re-save as JPEG to out_dir (normalized)
+    - Return the path to the JPEG file or None if preparation failed.
+    """
+    if not src_path or not os.path.exists(src_path):
+        return None
+    try:
+        # Force-open with PIL and re-save as JPEG
+        img = Image.open(src_path).convert("RGB")
+        out_path = os.path.join(out_dir, "scan_image.jpg")
+        img.save(out_path, format="JPEG", quality=85)
+        return out_path
+    except Exception as e:
+        log.warning(f"prepare_image_for_detector failed for {src_path}: {e}")
+        return None
+
+
 def scan_images_for_nsfw(image_paths: List[str]) -> float:
+    """
+    Returns max explicit score across images. Safe to call with mixed files.
+    Any per-image errors are logged and ignored (do not crash).
+    """
     if not image_paths:
         return 0.0
     max_score = 0.0
+    detector = None
+    try:
+        detector = get_detector()
+    except Exception as e:
+        log.warning(f"Detector not available: {e}")
+        return 0.0
+
     for path in image_paths:
+        if not path or not os.path.exists(path):
+            log.debug(f"[SCAN] Skipping missing path: {path}")
+            continue
         try:
+            # Call detector.detect; guard against unexpected return types
             detections = detector.detect(path)
             log.info(f"[DETECT] {path} -> {detections}")
+            if not detections:
+                continue
             for det in detections:
                 label = str(det.get("class", "")).upper()
                 score = float(det.get("score", 0.0))
@@ -431,25 +493,60 @@ def scan_images_for_nsfw(image_paths: List[str]) -> float:
                 else:
                     log.debug(f"[DETECT] Ignoring non-explicit label={label}, score={score:.2f}")
         except Exception as e:
-            log.warning(f"Scanning failed for {path}: {e}")
+            # Detector threw an error (e.g., image unreadable / model issue) — log and continue
+            log.warning(f"[DETECT] Scanning failed for {path}: {e}")
             continue
     return max_score
+
+
+async def safe_send_message(client: Client, chat_id: int, text: str, reply_markup=None, thread_id: Optional[int] = None):
+    """
+    Wrapper to send into a topic thread if thread_id provided.
+    """
+    try:
+        if thread_id:
+            return await client.send_message(chat_id, text, reply_markup=reply_markup, message_thread_id=thread_id)
+        else:
+            return await client.send_message(chat_id, text, reply_markup=reply_markup)
+    except Exception as e:
+        log.warning(f"Failed to send message to {chat_id} (thread {thread_id}): {e}")
+        return None
+
+
+async def safe_copy_message(client: Client, to_chat_id: int, from_chat_id: int, message_id: int, thread_id: Optional[int] = None):
+    """
+    Wrapper to copy a message into a topic thread if thread_id provided.
+    """
+    try:
+        if thread_id:
+            return await client.copy_message(to_chat_id, from_chat_id, message_id, message_thread_id=thread_id)
+        else:
+            return await client.copy_message(to_chat_id, from_chat_id, message_id)
+    except Exception as e:
+        log.warning(f"Failed to copy message {message_id} from {from_chat_id} to {to_chat_id} (thread {thread_id}): {e}")
+        return None
 
 
 async def delete_nsfw_message(client: Client, message: Message, score: float):
     chat = message.chat
     user = message.from_user
+    thread_id = getattr(message, "message_thread_id", None)
+
     try:
-        await message.delete()
+        # attempt delete the original message
+        try:
+            await message.delete()
+        except Exception as e:
+            log.warning(f"Failed to delete NSFW message in chat {chat.id}: {e}")
+
         log.info(
             f"[DELETE] NSFW content deleted in chat={chat.id}, "
             f"user={user.id if user else 'N/A'}, score={score:.2f}"
         )
     except Exception as e:
-        log.warning(f"Failed to delete NSFW message: {e}")
+        log.warning(f"Failed in delete_nsfw_message: {e}")
 
-    # Send a log message into the same chat (topic/public/private). If LOG_CHAT_ID is explicitly set,
-    # we still prefer posting into the same chat to match user's request.
+    # Send a log message into the same chat/topic (preferred)
     try:
         reason = f"NSFW detection score {score:.2f} >= threshold {NSFW_THRESHOLD}"
         mention = user.mention if user else "<b>Anonymous / Unknown</b>"
@@ -473,9 +570,15 @@ async def delete_nsfw_message(client: Client, message: Message, score: float):
             f"🆔 User ID: <code>{user.id if user else 'N/A'}</code>\n"
             f"📝 Reason: {reason}"
         )
-        sent = await client.send_message(chat.id, text, reply_markup=kb)
-        # schedule deletion of this log message in the group
-        asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
+        sent = await safe_send_message(client, chat.id, text, reply_markup=kb, thread_id=thread_id)
+        if sent:
+            asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
+        # Also optionally send same log to configured external LOG_CHAT_ID for record-keeping
+        if LOG_CHAT_ID:
+            try:
+                await client.send_message(LOG_CHAT_ID, text, reply_markup=kb)
+            except Exception:
+                pass
     except Exception as e:
         log.warning(f"Failed to send in-chat log message: {e}")
 
@@ -630,17 +733,23 @@ def build_subpage_keyboard(bot_username: str) -> InlineKeyboardMarkup:
 
 
 async def edit_main_message(msg: Message, text: str, keyboard: InlineKeyboardMarkup):
-    if msg.photo:
-        await msg.edit_caption(text, reply_markup=keyboard)
-    else:
-        await msg.edit_text(text, reply_markup=keyboard)
+    # edit in-place, compatible with messages that are photos or text
+    if msg is None:
+        return
+    try:
+        if getattr(msg, "photo", None):
+            await msg.edit_caption(text, reply_markup=keyboard)
+        else:
+            await msg.edit_text(text, reply_markup=keyboard)
+    except Exception as e:
+        log.warning(f"Failed to edit main message: {e}")
 
 
 # -------------------------------------------------
 # Violation handling (mute after limit) - improved
 # -------------------------------------------------
-async def notify_mute_to_log(client: Client, chat_id: int, user, violations: int, score: float, reason: str):
-    # Post the mute log into the same chat (where action occurred). Caller should pass chat_id.
+async def notify_mute_to_log(client: Client, chat_id: int, user, violations: int, score: float, reason: str, thread_id: Optional[int] = None):
+    # Post the mute log into the same chat/topic
     if not chat_id:
         return
     try:
@@ -666,8 +775,9 @@ async def notify_mute_to_log(client: Client, chat_id: int, user, violations: int
             f"⏱ Duration: <code>{MUTE_DURATION_SECONDS}s</code>\n"
             f"📝 Reason: {reason}"
         )
-        sent = await client.send_message(chat_id, text, reply_markup=kb)
-        asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
+        sent = await safe_send_message(client, chat_id, text, reply_markup=kb, thread_id=thread_id)
+        if sent:
+            asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
     except Exception as e:
         log.warning(f"Failed to send mute log message: {e}")
 
@@ -675,6 +785,7 @@ async def notify_mute_to_log(client: Client, chat_id: int, user, violations: int
 async def handle_nsfw_sticker_violation(client: Client, message: Message, score: float, reason: str = "NSFW content"):
     chat_id = message.chat.id
     user = message.from_user
+    thread_id = getattr(message, "message_thread_id", None)
     if not user:
         return
     # Do not mute admins/owners
@@ -704,12 +815,17 @@ async def handle_nsfw_sticker_violation(client: Client, message: Message, score:
         log.info(f"[VIOLATION] User={user.id} muted in chat={chat_id} for NSFW stickers. Duration={MUTE_DURATION_SECONDS}s")
         try:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Bot Logs / Updates", url=LOG_PUBLIC_URL)]])
-            reply_msg = await message.reply_text(f"🚫 {user.mention} has been muted for repeated NSFW content (>{NSFW_STICKER_LIMIT}).", reply_markup=kb)
-            # schedule deletion of the in-group notification
-            asyncio.create_task(schedule_delete(reply_msg, DELETE_LOG_MESSAGE_SECONDS))
+            reply_msg = None
+            try:
+                reply_msg = await message.reply_text(f"🚫 {user.mention} has been muted for repeated NSFW content (>{NSFW_STICKER_LIMIT}).", reply_markup=kb)
+            except Exception:
+                # If reply fails in topic contexts, send directly into thread
+                reply_msg = await safe_send_message(client, chat_id, f"🚫 {user.mention} has been muted for repeated NSFW content (>{NSFW_STICKER_LIMIT}).", reply_markup=kb, thread_id=thread_id)
+            if reply_msg:
+                asyncio.create_task(schedule_delete(reply_msg, DELETE_LOG_MESSAGE_SECONDS))
         except Exception:
             pass
-        await notify_mute_to_log(client, chat_id, user, new_count, score, reason)
+        await notify_mute_to_log(client, chat_id, user, new_count, score, reason, thread_id=thread_id)
     except Exception as e:
         log.warning(f"[VIOLATION] Failed to mute user={user.id} in chat={chat_id}: {e}")
 
@@ -821,11 +937,12 @@ async def ping_cmd(client: Client, message: Message):
 
 
 # -------------------------------------------------
-# /free (group) - no-reply flow supported (unchanged behavior)
+# /free (group) - no-reply flow supported
 # -------------------------------------------------
 @app.on_message(filters.command("free") & filters.group)
 async def free_cmd(client: Client, message: Message):
     chat_id = message.chat.id
+    thread_id = getattr(message, "message_thread_id", None)
     user = message.from_user
     if not await is_user_admin(client, chat_id, user.id):
         await message.reply_text("❌ Only group admins can use this command.", quote=True)
@@ -856,7 +973,8 @@ async def free_cmd(client: Client, message: Message):
             log.warning(f"Failed to send group confirm button: {e}")
 
         try:
-            pm_sticker_msg = await client.copy_message(user.id, message.chat.id, sticker_msg.message_id)
+            # copy the referenced sticker into admin's PM so they can preview it
+            copied = await safe_copy_message(client, user.id, sticker_msg.chat.id, getattr(sticker_msg, "message_id", getattr(sticker_msg, "id", None)))
             confirm_kb_pm = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("✅ Confirm whitelist", callback_data=f"free_confirm:{pending_id}"),
                   InlineKeyboardButton("❌ Cancel", callback_data=f"free_cancel:{pending_id}")]]
@@ -866,7 +984,8 @@ async def free_cmd(client: Client, message: Message):
                 f"You're about to whitelist a sticker in chat <code>{chat_id}</code> ({message.chat.title or 'group'}).\n\nPress Confirm to whitelist the sticker in that group (this is per-chat).",
                 reply_markup=confirm_kb_pm,
             )
-            asyncio.create_task(schedule_delete(pm_sticker_msg, CONFIRM_MSG_DELETE_SECONDS))
+            if copied:
+                asyncio.create_task(schedule_delete(copied, CONFIRM_MSG_DELETE_SECONDS))
             asyncio.create_task(schedule_delete(pm_text, CONFIRM_MSG_DELETE_SECONDS))
         except Exception as e:
             log.info(f"Could not send PM to admin {user.id}: {e}")
@@ -889,9 +1008,10 @@ async def free_cmd(client: Client, message: Message):
 
     # Send an in-chat log (instead of external LOG_CHAT_ID)
     try:
-        await client.send_message(chat_id,
+        await safe_send_message(client, chat_id,
             f"🛡 Whitelist requested by admin {user.mention} in chat <code>{chat_id}</code>."
-            f" Pending ID: <code>{pending_id}</code>")
+            f" Pending ID: <code>{pending_id}</code>",
+            thread_id=thread_id)
     except Exception:
         pass
 
@@ -902,6 +1022,7 @@ async def free_cmd(client: Client, message: Message):
 @app.on_message(filters.command("unfree") & filters.group)
 async def unfree_cmd(client: Client, message: Message):
     chat_id = message.chat.id
+    thread_id = getattr(message, "message_thread_id", None)
     user = message.from_user
     if not await is_user_admin(client, chat_id, user.id):
         await message.reply_text("❌ Only group admins can use this command.", quote=True)
@@ -934,8 +1055,9 @@ async def unfree_cmd(client: Client, message: Message):
             pass
     # send in-chat log
     try:
-        await client.send_message(chat_id,
-            f"❌ Unwhitelist requested by admin {user.mention} in chat <code>{chat_id}</code>.")
+        await safe_send_message(client, chat_id,
+            f"❌ Unwhitelist requested by admin {user.mention} in chat <code>{chat_id}</code>.",
+            thread_id=thread_id)
     except Exception:
         pass
 
@@ -946,6 +1068,7 @@ async def unfree_cmd(client: Client, message: Message):
 @app.on_message(filters.command("blockpack") & filters.group)
 async def blockpack_cmd(client: Client, message: Message):
     chat_id = message.chat.id
+    thread_id = getattr(message, "message_thread_id", None)
     user = message.from_user
     if not await is_user_admin(client, chat_id, user.id):
         await message.reply_text("❌ Only group admins can use this command.", quote=True)
@@ -971,8 +1094,9 @@ async def blockpack_cmd(client: Client, message: Message):
 
     # send an in-chat log
     try:
-        await client.send_message(chat_id,
-            f"Bulk block requested by admin {user.mention} in chat <code>{chat_id}</code>. Pending ID: <code>{pending_id}</code>")
+        await safe_send_message(client, chat_id,
+            f"Bulk block requested by admin {user.mention} in chat <code>{chat_id}</code>. Pending ID: <code>{pending_id}</code>",
+            thread_id=thread_id)
     except Exception:
         pass
 
@@ -996,7 +1120,6 @@ async def private_sticker_collector(client: Client, message: Message):
             file_unique_id = st.file_unique_id
             set_name = getattr(st, "set_name", None) or ""
             update_pending_action(str(pending_free["_id"]), {"file_unique_id": file_unique_id, "set_name": set_name})
-            pending = get_pending_action(str(pending_free["_1"]))
             pending = get_pending_action(str(pending_free["_id"]))
             pending_id = str(pending["_id"])
             confirm_kb_pm = InlineKeyboardMarkup(
@@ -1004,9 +1127,11 @@ async def private_sticker_collector(client: Client, message: Message):
                   InlineKeyboardButton("❌ Cancel", callback_data=f"free_cancel:{pending_id}")]]
             )
             try:
-                copied = await client.copy_message(user.id, message.chat.id, message.message_id)
+                # copy the sticker back into admin's PM so they see preview
+                copied = await safe_copy_message(client, user.id, message.chat.id, getattr(message, "message_id", getattr(message, "id", None)))
                 pm_text = await client.send_message(user.id, f"Sticker received for chat <code>{pending['chat_id']}</code>. Press Confirm to whitelist.", reply_markup=confirm_kb_pm)
-                asyncio.create_task(schedule_delete(copied, CONFIRM_MSG_DELETE_SECONDS))
+                if copied:
+                    asyncio.create_task(schedule_delete(copied, CONFIRM_MSG_DELETE_SECONDS))
                 asyncio.create_task(schedule_delete(pm_text, CONFIRM_MSG_DELETE_SECONDS))
             except Exception:
                 await message.reply_text("Sticker received. Press Confirm to whitelist.", reply_markup=confirm_kb_pm)
@@ -1050,9 +1175,9 @@ async def private_done_handler(client: Client, message: Message):
         add_pack_blacklist(chat_id, set_name)
     finalize_pending_action(pending_id)
     await message.reply_text(f"✅ Blocked {len(set_names)} sticker pack(s) for chat <code>{chat_id}</code>.", quote=True)
-    # Log in the chat
+    # Log in the chat (no thread id available here)
     try:
-        await client.send_message(chat_id, f"📦 Admin {user.mention} blocked sticker packs {', '.join(set_names)} for chat <code>{chat_id}</code>.")
+        await safe_send_message(client, chat_id, f"📦 Admin {user.mention} blocked sticker packs {', '.join(set_names)} for chat <code>{chat_id}</code>.")
     except Exception:
         pass
 
@@ -1061,10 +1186,12 @@ async def private_done_handler(client: Client, message: Message):
 # Media processing: main scanning handler for groups
 # - handles sticker, photo, animation, video, document
 # - deletes if NSFW, handles pack blacklist and whitelist
+# - supports forum topics by preserving message_thread_id when sending logs
 # -------------------------------------------------
 @app.on_message(filters.group & (filters.sticker | filters.photo | filters.video | filters.animation | filters.document))
 async def group_media_handler(client: Client, message: Message):
     chat_id = message.chat.id
+    thread_id = getattr(message, "message_thread_id", None)
     user = message.from_user
     if not message.from_user:
         return
@@ -1089,14 +1216,13 @@ async def group_media_handler(client: Client, message: Message):
                 log.info(f"[PACK DELETE] Deleted sticker from blacklisted pack {set_name} in chat {chat_id}. user={user.id} count={new_count}")
                 # If pack-based limit should trigger mute
                 if new_count > PACK_STICKER_LIMIT and not await is_user_admin(client, chat_id, user.id) and await bot_can_restrict_members(client, chat_id):
-                    # create dummy score and reason
                     reason = f"Sent stickers from blacklisted pack {set_name}"
                     await handle_nsfw_sticker_violation(client, message, score=0.0, reason=reason)
-                # Send in-chat log about the deletion (instead of external LOG_CHAT_ID)
+                # Send in-chat log about the deletion (in same topic/thread if present)
                 try:
-                    log_text = f"🗑 Deleted sticker from blacklisted pack <code>{set_name}</code> by {user.mention} in chat <code>{chat_id}</code>."
-                    sent = await client.send_message(chat_id, log_text)
-                    asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
+                    sent = await safe_send_message(client, chat_id, f"🗑 Deleted sticker from blacklisted pack <code>{set_name}</code> by {user.mention}.", thread_id=thread_id)
+                    if sent:
+                        asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
                 except Exception:
                     pass
                 return
@@ -1105,39 +1231,53 @@ async def group_media_handler(client: Client, message: Message):
         tmpdir = tempfile.mkdtemp(prefix="nsfwscan_")
         paths = []
         try:
-            # Sticker handling: convert webp/tgs to jpeg/png
+            # Sticker handling: download and convert webp/tgs to jpeg/png for detector
             if message.sticker:
+                # download to a file (pyrogram chooses extension)
                 file_path = await client.download_media(message, file_name=os.path.join(tmpdir, "sticker"))
                 # If tgs (animated) convert to png
                 if file_path and file_path.endswith(".tgs"):
                     out_png = os.path.join(tmpdir, "sticker.png")
                     converted = convert_tgs_to_png(file_path, out_png)
                     if converted:
-                        paths.append(converted)
+                        # Ensure detector gets a JPEG
+                        prepared = prepare_image_for_detector(converted, tmpdir)
+                        if prepared:
+                            paths.append(prepared)
                 else:
-                    # Pillow supports webp; convert to jpg for detector if needed
-                    if file_path:
-                        paths.append(file_path)
+                    # Normalize with PIL to avoid NoneType/shape errors
+                    prepared = prepare_image_for_detector(file_path, tmpdir)
+                    if prepared:
+                        paths.append(prepared)
             elif message.photo:
                 file_path = await client.download_media(message.photo.file_id, file_name=os.path.join(tmpdir, "photo.jpg"))
-                if file_path:
-                    paths.append(file_path)
+                prepared = prepare_image_for_detector(file_path, tmpdir)
+                if prepared:
+                    paths.append(prepared)
             elif message.animation:
                 # GIF -> extract frames
                 file_path = await client.download_media(message, file_name=os.path.join(tmpdir, "anim"))
                 frames = extract_video_frames(file_path, tmpdir, max_frames=3)
-                paths.extend(frames)
+                # prepare frames
+                for f in frames:
+                    p = prepare_image_for_detector(f, tmpdir)
+                    if p:
+                        paths.append(p)
             elif message.video or (message.document and (getattr(message.document, "mime_type", "") or "").startswith("video/")):
                 file_path = await client.download_media(message, file_name=os.path.join(tmpdir, "video"))
                 frames = extract_video_frames(file_path, tmpdir, max_frames=3)
-                paths.extend(frames)
+                for f in frames:
+                    p = prepare_image_for_detector(f, tmpdir)
+                    if p:
+                        paths.append(p)
             elif message.document:
-                # Some documents are images
+                # download and try to prepare (some documents are images)
                 file_path = await client.download_media(message, file_name=os.path.join(tmpdir, "doc"))
-                if file_path:
-                    paths.append(file_path)
+                prepared = prepare_image_for_detector(file_path, tmpdir)
+                if prepared:
+                    paths.append(prepared)
 
-            # Run scan
+            # Run scan (resilient)
             score = scan_images_for_nsfw(paths)
             if score >= NSFW_THRESHOLD:
                 # If sticker & part of pack => blacklist pack
@@ -1146,16 +1286,16 @@ async def group_media_handler(client: Client, message: Message):
                     if set_name:
                         add_pack_blacklist(chat_id, set_name)
                         try:
-                            log_text = f"🚫 Automatically blacklisted sticker pack <code>{set_name}</code> in chat <code>{chat_id}</code> (explicit sticker detected)."
-                            sent = await client.send_message(chat_id, log_text)
-                            asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
+                            sent = await safe_send_message(client, chat_id, f"🚫 Automatically blacklisted sticker pack <code>{set_name}</code> in chat <code>{chat_id}</code> (explicit sticker detected).", thread_id=thread_id)
+                            if sent:
+                                asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
                         except Exception:
                             pass
                 # Delete message and handle violation/mute
                 await delete_nsfw_message(client, message, score)
                 await handle_nsfw_sticker_violation(client, message, score, reason=f"NSFW detection score {score:.2f}")
             else:
-                log.debug(f"[SCAN] No explicit NSFW found (score {score:.2f}) for message {message.message_id} in chat {chat_id}")
+                log.debug(f"[SCAN] No explicit NSFW found (score {score:.2f}) for message {getattr(message, 'message_id', getattr(message, 'id', None))} in chat {chat_id}")
         finally:
             try:
                 shutil.rmtree(tmpdir)
@@ -1208,7 +1348,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
     # Close log / dismiss button
     if data == "close_log":
         try:
-            # attempt to delete the message that contains the inline keyboard (the log)
             await query.message.delete()
             await query.answer()
         except Exception:
@@ -1236,7 +1375,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await query.edit_message_text("✅ Sticker has been whitelisted for that chat.")
         await query.answer("Sticker whitelisted.")
         try:
-            await client.send_message(chat_id, f"✅ Sticker whitelisted in chat <code>{chat_id}</code> by admin {user.mention}.")
+            # post small confirmation into the group
+            await safe_send_message(client, chat_id, f"✅ Sticker whitelisted in chat <code>{chat_id}</code> by admin {user.mention}.")
         except Exception:
             pass
         return
@@ -1275,7 +1415,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         await query.edit_message_text("✅ Pack blacklist removed for the chat.")
         await query.answer("Done.")
         try:
-            await client.send_message(chat_id, f"✅ Pack <code>{set_name}</code> un-blacklisted for chat <code>{chat_id}</code> by {user.mention}.")
+            await safe_send_message(client, chat_id, f"✅ Pack <code>{set_name}</code> un-blacklisted for chat <code>{chat_id}</code> by {user.mention}.")
         except Exception:
             pass
         return
@@ -1391,3 +1531,4 @@ async def callback_handler(client: Client, query: CallbackQuery):
 if __name__ == "__main__":
     log.info("Starting NSFW Guard bot...")
     app.run()
+```
