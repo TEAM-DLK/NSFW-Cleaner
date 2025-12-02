@@ -549,17 +549,19 @@ async def delete_nsfw_message(client: Client, message: Message, score: float):
     try:
         reason = f"NSFW detection score {score:.2f} >= threshold {NSFW_THRESHOLD}"
         mention = user.mention if user else "<b>Anonymous / Unknown</b>"
-        kb = InlineKeyboardMarkup(
-            [
+
+        # Only include mod buttons if we have a valid user id
+        kb_rows = []
+        if user and getattr(user, "id", None):
+            kb_rows.append(
                 [
-                    InlineKeyboardButton("🔈 Unmute", callback_data=f"mod_action:unmute:{chat.id}:{user.id if user else 0}"),
-                    InlineKeyboardButton("⛔ Ban", callback_data=f"mod_action:ban:{chat.id}:{user.id if user else 0}")
-                ],
-                [
-                    InlineKeyboardButton("✖️ Close", callback_data="close_log")
+                    InlineKeyboardButton("🔈 Unmute", callback_data=f"mod_action:unmute:{chat.id}:{user.id}"),
+                    InlineKeyboardButton("⛔ Ban", callback_data=f"mod_action:ban:{chat.id}:{user.id}")
                 ]
-            ]
-        )
+            )
+        kb_rows.append([InlineKeyboardButton("✖️ Close", callback_data="close_log")])
+        kb = InlineKeyboardMarkup(kb_rows)
+
         text = (
             "🔍 <b>NSFW content deleted</b>\n\n"
             f"👤 User: {mention}\n"
@@ -753,17 +755,17 @@ async def notify_mute_to_log(client: Client, chat_id: int, user, violations: int
         return
     try:
         mention = user.mention if user else "<b>Unknown</b>"
-        kb = InlineKeyboardMarkup(
-            [
+        kb_rows = []
+        if user and getattr(user, "id", None):
+            kb_rows.append(
                 [
-                    InlineKeyboardButton("🔈 Unmute", callback_data=f"mod_action:unmute:{chat_id}:{user.id if user else 0}"),
-                    InlineKeyboardButton("⛔ Ban", callback_data=f"mod_action:ban:{chat_id}:{user.id if user else 0}")
-                ],
-                [
-                    InlineKeyboardButton("✖️ Close", callback_data="close_log")
-                ],
-            ]
-        )
+                    InlineKeyboardButton("🔈 Unmute", callback_data=f"mod_action:unmute:{chat_id}:{user.id}"),
+                    InlineKeyboardButton("⛔ Ban", callback_data=f"mod_action:ban:{chat_id}:{user.id}")
+                ]
+            )
+        kb_rows.append([InlineKeyboardButton("✖️ Close", callback_data="close_log")])
+        kb = InlineKeyboardMarkup(kb_rows)
+
         text = (
             "🚫 <b>User muted for NSFW stickers</b>\n\n"
             f"👥 Chat: <code>{chat_id}</code>\n"
@@ -1045,7 +1047,7 @@ async def unfree_cmd(client: Client, message: Message):
         )
         try:
             grp = await message.reply_text(
-                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, confirm the action in my private chat.",
+                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, confirm in my private chat.",
                 reply_markup=kb,
                 quote=True,
             )
@@ -1119,7 +1121,7 @@ async def private_sticker_collector(client: Client, message: Message):
             file_unique_id = st.file_unique_id
             set_name = getattr(st, "set_name", None) or ""
             update_pending_action(str(pending_free["_id"]), {"file_unique_id": file_unique_id, "set_name": set_name})
-            pending = get_pending_action(str(pending_free["_1"]))
+            pending = get_pending_action(str(pending_free["_id"]))
             pending_id = str(pending_free["_id"])
             confirm_kb_pm = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("✅ Confirm whitelist", callback_data=f"free_confirm:{pending_id}"),
@@ -1193,6 +1195,11 @@ async def group_media_handler(client: Client, message: Message):
     thread_id = getattr(message, "message_thread_id", None)
     user = message.from_user
     if not message.from_user:
+        return
+
+    # Ensure bot has delete permission early; otherwise nothing will work
+    if not await is_bot_admin(client, chat_id):
+        log.info(f"[MEDIA HANDLER] Bot is not admin in chat {chat_id}; skipping moderation.")
         return
 
     try:
@@ -1482,6 +1489,11 @@ async def callback_handler(client: Client, query: CallbackQuery):
         target_chat = int(m.group(2))
         target_user = int(m.group(3))
 
+        # Basic validation
+        if not target_chat or not target_user:
+            await query.answer("Invalid target chat or user.", show_alert=True)
+            return
+
         # Permission checks: only allow if clicking user is owner or is admin in target chat
         caller_id = user.id
         allowed = (caller_id in OWNER_IDS)
@@ -1492,6 +1504,11 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 allowed = False
         if not allowed:
             await query.answer("You do not have permission to perform this action in the target chat.", show_alert=True)
+            return
+
+        # Ensure bot has restrict/ban permission in that chat
+        if not await bot_can_restrict_members(client, target_chat):
+            await query.answer("Bot lacks restrict/ban permissions in target chat.", show_alert=True)
             return
 
         if action == "unmute":
@@ -1507,15 +1524,22 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 can_pin_messages=False,
             )
             try:
-                # IMPORTANT: to unmute a user we set their permissions back to allowed.
-                # Passing until_date=0 previously could be interpreted oddly; using default (None)
-                # and explicit permissions is more reliable across Pyrogram/Telegram versions.
+                # Try normal unmute first
                 await client.restrict_chat_member(target_chat, target_user, permissions=permissions)
-                # edit response message (use HTML parse mode for tg:// link)
                 await query.edit_message_text(f"🔈 User <a href='tg://user?id={target_user}'>user</a> has been unmuted in chat <code>{target_chat}</code>.", parse_mode="html")
                 await query.answer("User unmuted.")
             except Exception as e:
-                await query.answer(f"Failed to unmute: {e}", show_alert=True)
+                # fallback attempts (some pyrogram/telegram versions treat until_date differently)
+                log.warning(f"Initial unmute failed for {target_user} in {target_chat}: {e}")
+                try:
+                    # try with until_date=0 which sometimes clears restrictions
+                    await client.restrict_chat_member(target_chat, target_user, permissions=permissions, until_date=0)
+                    await query.edit_message_text(f"🔈 User <a href='tg://user?id={target_user}'>user</a> has been unmuted in chat <code>{target_chat}</code>.", parse_mode="html")
+                    await query.answer("User unmuted.")
+                except Exception as e2:
+                    log.warning(f"Fallback unmute also failed: {e2}")
+                    await query.answer(f"Failed to unmute: {e2}", show_alert=True)
+            return
         elif action == "ban":
             try:
                 await client.ban_chat_member(target_chat, target_user)
@@ -1523,7 +1547,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.answer("User banned.")
             except Exception as e:
                 await query.answer(f"Failed to ban: {e}", show_alert=True)
-        return
+            return
 
     await query.answer()
 
