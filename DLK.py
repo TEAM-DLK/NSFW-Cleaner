@@ -18,7 +18,6 @@ from pyrogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ChatPermissions,
-    CallbackQuery,
 )
 from pyrogram.enums import ChatMemberStatus
 from nudenet import NudeDetector
@@ -191,7 +190,7 @@ def create_pending_action(action_type: str, chat_id: int, admin_user_id: int, fi
     action_type:
       - 'whitelist' : per-sticker whitelist (from /free)
       - 'unblacklist' : remove pack-blacklist (from /unfree)
-      - 'bulk_block' : admin will send multiple stickers in PM then 'DONE' to blacklist the pack(s) for the chat
+      - 'bulk_block' : admin will send multiple stickers in PM then 'DONE' to blacklist the pack for the chat
     """
     doc = {
         "action": action_type,
@@ -200,7 +199,6 @@ def create_pending_action(action_type: str, chat_id: int, admin_user_id: int, fi
         "file_unique_id": file_unique_id or "",
         "set_name": set_name or "",
         "stickers": [],  # used for bulk_block to collect file_unique_ids
-        "set_names": [],  # collect pack set names for bulk_block (supports multiple packs)
         "state": "open",
         "ts": int(time.time()),
     }
@@ -239,24 +237,9 @@ def push_sticker_to_pending(pending_id: str, file_unique_id: str):
         pass
 
 
-def push_setname_to_pending(pending_id: str, set_name: str):
-    try:
-        if set_name:
-            pending_col.update_one({"_id": ObjectId(pending_id)}, {"$addToSet": {"set_names": set_name}})
-    except Exception:
-        pass
-
-
 def finalize_pending_action(pending_id: str):
     try:
         pending_col.update_one({"_id": ObjectId(pending_id)}, {"$set": {"state": "done", "done_ts": int(time.time())}})
-    except Exception:
-        pass
-
-
-def cancel_pending_action(pending_id: str):
-    try:
-        pending_col.update_one({"_id": ObjectId(pending_id)}, {"$set": {"state": "cancelled", "cancel_ts": int(time.time())}})
     except Exception:
         pass
 
@@ -723,8 +706,8 @@ async def start_cmd(client: Client, message: Message):
                 [[InlineKeyboardButton("❌ Cancel", callback_data=f"block_cancel:{pending_id}")]]
             )
             await message.reply_text(
-                "Bulk pack block — send stickers (up to 50 by default) from one or more packs here, then send DONE to finalize.\n"
-                "Stickers you send will be collected. When finished, send a message with just DONE.",
+                "Bulk pack block — send up to 50 stickers from the same pack here, then send DONE to finalize.\n"
+                "Stickers you send will be collected (only from the same pack). When finished, send a message with just DONE.",
                 reply_markup=kb,
             )
             return
@@ -888,7 +871,7 @@ async def unfree_cmd(client: Client, message: Message):
         )
         try:
             grp = await message.reply_text(
-                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, click the button to confirm in my private chat.",
+                f"⚠️ Pack <code>{set_name}</code> is currently blacklisted in this chat. If you want to remove the pack-level blacklist so stickers from this pack stop being auto-deleted, click the button and confirm in my private chat.",
                 reply_markup=kb,
                 quote=True,
             )
@@ -909,7 +892,6 @@ async def unfree_cmd(client: Client, message: Message):
 #  - Admin in group runs /blockpack → bot posts deep-link to PM
 #  - Admin opens PM, sends up to 50 stickers from same pack, then sends DONE
 #  - Bot blacklists that pack for the originating chat
-# Updated: supports collecting stickers from multiple packs in one bulk operation
 # -------------------------------------------------
 @app.on_message(filters.command("blockpack") & filters.group)
 async def blockpack_cmd(client: Client, message: Message):
@@ -929,7 +911,8 @@ async def blockpack_cmd(client: Client, message: Message):
     )
     try:
         grp_msg = await message.reply_text(
-            "📦 Bulk block: Click the button to open my private chat. Then send up to 50 stickers here (can be from multiple packs). When finished, send DONE to finalize and blacklist the collected pack(s) for this chat.",
+            "📦 Bulk block: Click the button to open my private chat. Then send up to 50 stickers from the same pack here, and send DONE when finished.\n"
+            "After DONE I'll blacklist that pack for this chat.",
             reply_markup=kb,
             quote=True,
         )
@@ -948,7 +931,7 @@ async def blockpack_cmd(client: Client, message: Message):
 # -------------------------------------------------
 # Private handlers for collecting stickers and confirming actions
 # - When admin opens PM via deep-link, start_cmd shows instructions.
-# - Admin sends sticker messages: we accept them for pending bulk_block (now supports multiple packs)
+# - Admin sends sticker messages: we accept them for pending bulk_block
 # - Admin presses Confirm buttons for single whitelist (free_confirm)
 # - Admin sends DONE text to finalize bulk_block
 # -------------------------------------------------
@@ -996,219 +979,407 @@ async def private_sticker_collector(client: Client, message: Message):
     st = message.sticker
     set_name = getattr(st, "set_name", None) or ""
     if not set_name:
-        await message.reply_text("This sticker doesn't belong to a sticker pack; please send stickers from the pack(s) you want to block.")
+        await message.reply_text("This sticker doesn't belong to a sticker pack; please send stickers from the pack you want to block.")
         return
 
-    # Collect up to 200 unique stickers overall (configurable)
+    # If set_name not set yet in pending, set it
+    if not pending.get("set_name"):
+        update_pending_action(pending_id, {"set_name": set_name})
+        pending = get_pending_action(pending_id)
+
+    # If sticker pack differs, refuse
+    if pending.get("set_name") and pending.get("set_name") != set_name:
+        await message.reply_text("Please send stickers from the same pack only. This bulk operation collects stickers for a single pack.")
+        return
+
+    # Collect up to 50 unique stickers
     current_stickers = pending.get("stickers", []) or []
-    if len(current_stickers) >= 200:
-        await message.reply_text("You've reached the maximum sticker limit for this bulk block. Send DONE to finalize.")
+    if len(current_stickers) >= 50:
+        await message.reply_text("You've reached the 50-sticker limit for this bulk block. Send DONE to finalize.")
         return
 
-    file_unique_id = st.file_unique_id
-    # Add sticker and set_name to pending
-    push_sticker_to_pending(pending_id, file_unique_id)
-    push_setname_to_pending(pending_id, set_name)
-
-    # Provide user feedback (do not clutter)
-    set_names = get_pending_action(pending_id).get("set_names", []) or []
-    await message.reply_text(f"Sticker added. Collected packs: {len(set_names)}. Total stickers collected: {len(get_pending_action(pending_id).get('stickers', []) or [])}.\nSend more stickers or send DONE to finalize.", quote=True)
+    # add sticker to pending
+    push_sticker_to_pending(pending_id, st.file_unique_id)
+    pending = get_pending_action(pending_id)
+    count = len(pending.get("stickers", []) or [])
+    # reply with progress and schedule deletion
+    try:
+        info = await message.reply_text(f"Collected {count}/50 stickers for pack <code>{set_name}</code>. Send more or send DONE to finalize.", quote=True)
+        asyncio.create_task(schedule_delete(info, CONFIRM_MSG_DELETE_SECONDS))
+    except Exception:
+        pass
 
 
 @app.on_message(filters.private & filters.text)
 async def private_text_handler(client: Client, message: Message):
-    # Handle DONE / done to finalize bulk_block and other text commands in PM
+    # Used for finalizing bulk_block by sending 'DONE' (case-insensitive)
     user = message.from_user
-    txt = (message.text or "").strip().lower()
-    if txt == "done":
+    text = (message.text or "").strip()
+    if text.upper() == "DONE":
         pending = get_latest_pending_for_admin(user.id, "bulk_block")
         if not pending:
-            await message.reply_text("No open bulk-block request found.")
+            await message.reply_text("No open bulk block request found. Start from the group using /blockpack.")
             return
-        if pending.get("state") != "open":
-            await message.reply_text("This bulk-block request is no longer open.")
+        pending_id = str(pending["_id"])
+        set_name = pending.get("set_name", "")
+        chat_id = int(pending.get("chat_id"))
+        stickers = pending.get("stickers", []) or []
+        if not set_name:
+            await message.reply_text("No pack detected. Please send at least one sticker from the pack you want to block before sending DONE.")
             return
-        set_names = pending.get("set_names", []) or []
-        chat_id = pending.get("chat_id")
-        if not set_names:
-            await message.reply_text("No sticker packs were collected. Please send stickers from the packs you want to block before sending DONE.")
-            return
-        # Blacklist each collected pack for the originating chat
-        blocked = []
-        for set_name in set_names:
-            try:
-                add_pack_blacklist(chat_id, set_name)
-                blocked.append(set_name)
-            except Exception as e:
-                log.warning(f"Failed to blacklist pack {set_name} for chat {chat_id}: {e}")
-        finalize_pending_action(str(pending["_id"]))
-        # Notify admin
+        # Finalize: add pack blacklist for target chat
+        add_pack_blacklist(chat_id, set_name)
+        finalize_pending_action(pending_id)
+        # Notify group
         try:
-            packs_list = "\n".join([f"• {s}" for s in blocked])
-            await message.reply_text(f"✅ Blacklisted {len(blocked)} pack(s) for chat <code>{chat_id}</code>:\n{packs_list}")
+            await client.send_message(chat_id, f"🚫 Pack <code>{set_name}</code> has been blacklisted by admin {message.from_user.mention}. Stickers from this pack will be auto-deleted in this group.")
         except Exception:
             pass
-        # Notify group (if bot can)
+        # Reply in PM and schedule delete
         try:
-            await client.send_message(chat_id, f"⚠️ Admin {user.mention} blacklisted {len(blocked)} sticker pack(s) for this chat.", disable_web_page_preview=True)
+            done_msg = await message.reply_text("✅ DONE. The pack has been blacklisted for the group. This confirmation will be deleted shortly.")
+            asyncio.create_task(schedule_delete(done_msg, CONFIRM_MSG_DELETE_SECONDS))
+            asyncio.create_task(schedule_delete(message, CONFIRM_MSG_DELETE_SECONDS))
         except Exception:
             pass
         if LOG_CHAT_ID:
             try:
-                await client.send_message(LOG_CHAT_ID, f"📦 Bulk-block finalized by {user.mention} for chat <code>{chat_id}</code>. Packs:\n{','.join(blocked)}")
+                await client.send_message(LOG_CHAT_ID, f"Bulk block completed by {message.from_user.mention} for chat <code>{chat_id}</code>. Pack: <code>{set_name}</code>. Collected stickers: {len(stickers)}")
             except Exception:
                 pass
         return
 
-    # Allow "cancel" text to cancel pending bulk
-    if txt in ("cancel", "abort"):
-        pending = get_latest_pending_for_admin(user.id, "bulk_block")
-        if pending:
-            cancel_pending_action(str(pending["_id"]))
-            await message.reply_text("Bulk-block request cancelled.")
-        else:
-            await message.reply_text("No open request found.")
-        return
-
-    # Other text messages are ignored here
+    # Otherwise ignore other PM texts (or could be used for other flows)
+    # Also handle pending 'whitelist' that is waiting for confirmation via text? Not necessary.
     return
 
 
 # -------------------------------------------------
-# Callback query handlers for confirmations & cancels
+# Callback queries (inline buttons)
+# Handles confirm/cancel for free_confirm, free_cancel, unblack_confirm, unblack_cancel and block cancels
 # -------------------------------------------------
 @app.on_callback_query()
-async def callback_handler(client: Client, callback: CallbackQuery):
-    data = callback.data or ""
-    user = callback.from_user
+async def callback_handler(client: Client, callback_query):
     try:
-        if data.startswith("free_confirm:"):
+        data = callback_query.data
+        msg = callback_query.message
+        me = await client.get_me()
+        bot_username = me.username or "NSFWGuardBot"
+
+        # Whitelist confirm flow
+        if data and data.startswith("free_confirm:"):
             pending_id = data.split(":", 1)[1]
             pending = get_pending_action(pending_id)
             if not pending:
-                await callback.answer("Request not found or expired.", show_alert=True)
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
                 return
-            if user.id != int(pending["admin_user_id"]):
-                await callback.answer("You are not authorized to confirm this request.", show_alert=True)
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to confirm this request.", show_alert=True)
                 return
-            file_unique_id = pending.get("file_unique_id", "")
-            chat_id = pending.get("chat_id")
+            chat_id = int(pending["chat_id"])
+            file_unique_id = pending["file_unique_id"]
+            set_name = pending.get("set_name", "") or ""
             if not file_unique_id:
-                await callback.answer("No sticker attached to this request.", show_alert=True)
+                await callback_query.answer("No sticker attached to this request. Please send sticker in private chat first.", show_alert=True)
                 return
             add_sticker_whitelist(chat_id, file_unique_id)
+            if set_name:
+                remove_pack_blacklist(chat_id, set_name)
             finalize_pending_action(pending_id)
-            await callback.message.edit_text("✅ Sticker has been whitelisted for that chat.")
-            await callback.answer("Sticker whitelisted.", show_alert=False)
+            delete_pending_action = lambda pid: None  # deprecated alias (we finalize only)
+            try:
+                await callback_query.answer("Sticker whitelisted for the chat.", show_alert=False)
+                await callback_query.message.edit_text("✅ Sticker has been whitelisted in the chat.\nPack-level blacklist (if present) has been removed for that chat.")
+            except Exception:
+                pass
+            try:
+                await client.send_message(chat_id, f"✅ Sticker has been whitelisted by admin {callback_query.from_user.mention}. This sticker will no longer be deleted by the NSFW filter in this group.")
+            except Exception:
+                pass
             if LOG_CHAT_ID:
                 try:
-                    await client.send_message(LOG_CHAT_ID, f"✅ Whitelist confirmed by {user.mention} for chat <code>{chat_id}</code> (pending {pending_id}).")
+                    await client.send_message(LOG_CHAT_ID, f"✅ Sticker whitelisted by admin {callback_query.from_user.mention} in chat <code>{chat_id}</code>.\n<code>{file_unique_id}</code>\nPack: <code>{set_name}</code>")
                 except Exception:
                     pass
             return
 
-        if data.startswith("free_cancel:") or data.startswith("free_cancel_group:"):
-            pending_id = data.split(":", 1)[1]
-            pending = get_pending_action(pending_id)
-            if pending:
-                cancel_pending_action(pending_id)
-            try:
-                await callback.message.edit_text("❌ Whitelist request cancelled.")
-            except Exception:
-                pass
-            await callback.answer("Cancelled.", show_alert=False)
-            return
-
-        if data.startswith("unblack_confirm:"):
+        # Cancel whitelist from PM
+        if data and data.startswith("free_cancel:"):
             pending_id = data.split(":", 1)[1]
             pending = get_pending_action(pending_id)
             if not pending:
-                await callback.answer("Request not found or expired.", show_alert=True)
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
                 return
-            if user.id != int(pending["admin_user_id"]):
-                await callback.answer("You are not authorized to confirm this request.", show_alert=True)
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to cancel this request.", show_alert=True)
                 return
-            set_name = pending.get("set_name", "")
-            chat_id = pending.get("chat_id")
-            remove_pack_blacklist(chat_id, set_name)
-            finalize_pending_action(pending_id)
-            await callback.message.edit_text(f"✅ Pack <code>{set_name}</code> removed from blacklist for chat <code>{chat_id}</code>.")
-            await callback.answer("Pack un-blacklisted.", show_alert=False)
+            pending_col.delete_one({"_id": ObjectId(pending_id)})
+            await callback_query.answer("Whitelist request cancelled.", show_alert=False)
+            try:
+                await callback_query.message.edit_text("❌ Whitelist request cancelled.")
+            except Exception:
+                pass
+            return
+
+        # Group-level cancel whitelist
+        if data and data.startswith("free_cancel_group:"):
+            pending_id = data.split(":", 1)[1]
+            pending = get_pending_action(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to cancel this request.", show_alert=True)
+                return
+            pending_col.delete_one({"_id": ObjectId(pending_id)})
+            await callback_query.answer("Whitelist request cancelled.", show_alert=False)
+            try:
+                await callback_query.message.edit_text("❌ Whitelist request cancelled.")
+            except Exception:
+                pass
+            return
+
+        # Unblacklist confirm (from PM)
+        if data and data.startswith("unblack_confirm:"):
+            pending_id = data.split(":", 1)[1]
+            pending = get_pending_action(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to confirm this request.", show_alert=True)
+                return
+            chat_id = int(pending["chat_id"])
+            set_name = pending.get("set_name", "") or ""
+            if set_name:
+                remove_pack_blacklist(chat_id, set_name)
+            pending_col.delete_one({"_id": ObjectId(pending_id)})
+            await callback_query.answer("Pack blacklist removed for the chat.", show_alert=False)
+            try:
+                await callback_query.message.edit_text("✅ Pack blacklist removed for the chat.")
+            except Exception:
+                pass
+            try:
+                await client.send_message(chat_id, f"✅ Pack <code>{set_name}</code> blacklist has been removed by admin {callback_query.from_user.mention}. Stickers from this pack will no longer be auto-deleted.")
+            except Exception:
+                pass
             if LOG_CHAT_ID:
                 try:
-                    await client.send_message(LOG_CHAT_ID, f"✅ Pack {set_name} un-blacklisted by {user.mention} for chat <code>{chat_id}</code>.")
+                    await client.send_message(LOG_CHAT_ID, f"✅ Pack blacklist removed by admin {callback_query.from_user.mention} in chat <code>{chat_id}</code>.\nPack: <code>{set_name}</code>")
                 except Exception:
                     pass
             return
 
-        if data.startswith("unblack_cancel:") or data.startswith("unblack_cancel_group:"):
+        # Cancel unblack from PM
+        if data and data.startswith("unblack_cancel:"):
             pending_id = data.split(":", 1)[1]
             pending = get_pending_action(pending_id)
-            if pending:
-                cancel_pending_action(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to cancel this request.", show_alert=True)
+                return
+            pending_col.delete_one({"_id": ObjectId(pending_id)})
+            await callback_query.answer("Request cancelled.", show_alert=False)
             try:
-                await callback.message.edit_text("❌ Unblacklist request cancelled.")
+                await callback_query.message.edit_text("❌ Request cancelled.")
             except Exception:
                 pass
-            await callback.answer("Cancelled.", show_alert=False)
             return
 
-        if data.startswith("block_cancel:") or data.startswith("block_cancel_group:"):
+        # Bulk-block cancel from PM
+        if data and data.startswith("block_cancel:"):
             pending_id = data.split(":", 1)[1]
             pending = get_pending_action(pending_id)
-            if pending:
-                cancel_pending_action(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to cancel this request.", show_alert=True)
+                return
+            pending_col.delete_one({"_id": ObjectId(pending_id)})
+            await callback_query.answer("Bulk-block request cancelled.", show_alert=False)
             try:
-                await callback.message.edit_text("❌ Bulk-block request cancelled.")
+                await callback_query.message.edit_text("❌ Bulk-block request cancelled.")
             except Exception:
                 pass
-            await callback.answer("Cancelled.", show_alert=False)
             return
 
-        # Navigation pages (main/help/etc)
-        if data == "page_how":
-            await edit_main_message(callback.message, get_how_text(), build_subpage_keyboard((await client.get_me()).username or "NSFWGuardBot"))
-            await callback.answer()
+        # Group-level cancel bulk-block
+        if data and data.startswith("block_cancel_group:"):
+            pending_id = data.split(":", 1)[1]
+            pending = get_pending_action(pending_id)
+            if not pending:
+                await callback_query.answer("This request has expired or is invalid.", show_alert=True)
+                try:
+                    await callback_query.message.edit_reply_markup(None)
+                except Exception:
+                    pass
+                return
+            if callback_query.from_user.id != int(pending["admin_user_id"]):
+                await callback_query.answer("You are not allowed to cancel this request.", show_alert=True)
+                return
+            pending_col.delete_one({"_id": ObjectId(pending_id)})
+            await callback_query.answer("Bulk-block request cancelled.", show_alert=False)
+            try:
+                await callback_query.message.edit_text("❌ Bulk-block request cancelled.")
+            except Exception:
+                pass
             return
-        if data == "page_features":
-            await edit_main_message(callback.message, get_features_text(), build_subpage_keyboard((await client.get_me()).username or "NSFWGuardBot"))
-            await callback.answer()
-            return
-        if data == "page_perms":
-            await edit_main_message(callback.message, get_perms_text(), build_subpage_keyboard((await client.get_me()).username or "NSFWGuardBot"))
-            await callback.answer()
-            return
-        if data == "page_about":
-            await edit_main_message(callback.message, get_about_text(), build_subpage_keyboard((await client.get_me()).username or "NSFWGuardBot"))
-            await callback.answer()
-            return
+
+        # Existing UI pages (help)
         if data == "page_main":
-            await edit_main_message(callback.message, get_main_text(), build_main_keyboard((await client.get_me()).username or "NSFWGuardBot"))
-            await callback.answer()
-            return
+            await callback_query.answer()
+            await edit_main_message(msg, get_main_text(), build_main_keyboard(bot_username))
+        elif data == "page_how":
+            await callback_query.answer()
+            await edit_main_message(msg, get_how_text(), build_subpage_keyboard(bot_username))
+        elif data == "page_features":
+            await callback_query.answer()
+            await edit_main_message(msg, get_features_text(), build_subpage_keyboard(bot_username))
+        elif data == "page_perms":
+            await callback_query.answer()
+            await edit_main_message(msg, get_perms_text(), build_subpage_keyboard(bot_username))
+        elif data == "page_about":
+            await callback_query.answer()
+            await edit_main_message(msg, get_about_text(), build_subpage_keyboard(bot_username))
+        else:
+            await callback_query.answer("Unknown action.", show_alert=False)
 
     except Exception as e:
-        log.warning(f"Callback handling error: {e}")
+        log.error(f"Error in callback_handler: {e}")
+
+
+# -------------------------------------------------
+# Main filter handler (stickers, photos, videos, GIFs)
+# Behavior: whitelist takes precedence over pack blacklist
+# -------------------------------------------------
+@app.on_message(filters.group & (filters.sticker | filters.photo | filters.video | filters.animation))
+async def media_guard(client: Client, message: Message):
+    chat_id = message.chat.id
+    log.info(
+        f"[MEDIA] New media in chat={chat_id}, user={getattr(message.from_user, 'id', 'N/A')}, "
+        f"types: sticker={bool(message.sticker)}, photo={bool(message.photo)}, "
+        f"video={bool(message.video)}, animation={bool(message.animation)}"
+    )
+
+    if not await is_bot_admin(client, chat_id):
+        log.info(f"[MEDIA] Bot is not admin or cannot delete in chat={chat_id}, skipping.")
+        return
+
+    if not message.from_user or message.from_user.is_bot:
+        return
+
+    user = message.from_user
+    temp_root = tempfile.mkdtemp(prefix="nsfw_guard_")
+    image_paths: list[str] = []
+
+    try:
+        if message.sticker:
+            st = message.sticker
+            set_name = getattr(st, "set_name", None)
+
+            # 1) Sticker whitelist first — whitelisted stickers should NEVER be deleted in this chat
+            if is_sticker_whitelisted(chat_id, st.file_unique_id):
+                log.info(f"[MEDIA] Sticker is whitelisted (chat={chat_id}, file_unique_id={st.file_unique_id})")
+                return
+
+            # 2) PACK BLACKLIST next — if pack is blacklisted for this chat, delete without scan
+            if set_name and is_pack_blacklisted(chat_id, set_name):
+                log.info(f"[MEDIA] Sticker pack blacklisted (chat={chat_id}, set_name={set_name}). Deleting without scan.")
+                await delete_nsfw_message(client, message, score=1.0)
+                await handle_nsfw_sticker_violation(client, message, score=1.0)
+                return
+
+            file_path = await message.download(file_name=os.path.join(temp_root, "sticker"))
+            if st.is_animated:
+                png_path = os.path.join(temp_root, "sticker.png")
+                converted = convert_tgs_to_png(file_path, png_path)
+                if converted:
+                    image_paths.append(converted)
+            elif st.is_video:
+                frame_dir = os.path.join(temp_root, "frames")
+                os.makedirs(frame_dir, exist_ok=True)
+                frames = extract_video_frames(file_path, frame_dir, max_frames=3)
+                image_paths.extend(frames)
+            else:
+                image_paths.append(file_path)
+
+        elif message.photo:
+            file_path = await message.download(file_name=os.path.join(temp_root, "photo"))
+            image_paths.append(file_path)
+        elif message.video or message.animation:
+            file_path = await message.download(file_name=os.path.join(temp_root, "video"))
+            frame_dir = os.path.join(temp_root, "frames")
+            os.makedirs(frame_dir, exist_ok=True)
+            frames = extract_video_frames(file_path, frame_dir, max_frames=3)
+            image_paths.extend(frames)
+
+        if not image_paths:
+            log.info(f"[MEDIA] No image paths extracted, skipping.")
+            return
+
+        score = scan_images_for_nsfw(image_paths)
+        log.info(f"[MEDIA] Scan result chat={chat_id}, user={user.id}, score={score:.2f}, threshold={NSFW_THRESHOLD}")
+
+        if score >= NSFW_THRESHOLD:
+            await delete_nsfw_message(client, message, score)
+            if message.sticker:
+                st = message.sticker
+                set_name = getattr(st, "set_name", None)
+                if set_name:
+                    add_pack_blacklist(chat_id, set_name)
+                    log.info(f"[PACK-BL] Blacklisted sticker pack in chat={chat_id}, set_name={set_name}")
+                    if LOG_CHAT_ID:
+                        try:
+                            await client.send_message(LOG_CHAT_ID,
+                                "🚫 <b>Sticker pack blacklisted</b>\n\n"
+                                f"👥 Chat ID: <code>{chat_id}</code>\n"
+                                f"📦 Pack: <code>{set_name}</code>\n"
+                                f"👤 Triggered by: {user.mention if user else 'Unknown'}\n"
+                                f"📊 Score: <code>{score:.2f}</code>")
+                        except Exception as e:
+                            log.warning(f"Failed to send pack blacklist log: {e}")
+                await handle_nsfw_sticker_violation(client, message, score)
+        else:
+            log.info(f"[MEDIA] Content seems safe (chat={chat_id}, user={user.id}, score={score:.2f})")
+    except Exception as e:
+        log.error(f"Error in media_guard: {e}")
+    finally:
         try:
-            await callback.answer("An error occurred.", show_alert=True)
+            shutil.rmtree(temp_root)
         except Exception:
             pass
 
 
 # -------------------------------------------------
-# Message handlers for incoming chat content (scanning & deletion)
-# Note: For brevity this example leaves the existing scanning handlers out.
-# In your actual bot keep your existing handlers for stickers/photos/videos and reuse:
-#  - is_pack_blacklisted()
-#  - is_sticker_whitelisted()
-#  - scan_images_for_nsfw()
-#  - delete_nsfw_message()
-#  - handle_nsfw_sticker_violation()
+# Main
 # -------------------------------------------------
-# (Placeholders / core logic should remain in your real bot)
-# -------------------------------------------------
-
-
 if __name__ == "__main__":
-    log.info("Starting NSFW guard bot...")
+    log.info("NSFW Guard Bot is starting...")
     app.run()
