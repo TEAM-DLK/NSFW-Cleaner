@@ -175,14 +175,62 @@ detector = NudeDetector()
 
 # Only these labels are considered explicit NSFW
 EXPLICIT_LABELS = {
+    # Genitalia Exposure
     "FEMALE_GENITALIA_EXPOSED",
     "MALE_GENITALIA_EXPOSED",
+    "GENITALIA_EXPOSED",
     "ANUS_EXPOSED",
+
+    # Breast / Chest Exposure
     "FEMALE_BREAST_EXPOSED",
+    "FEMALE_NIPPLE_EXPOSED",
+    "BREAST_EXPOSED",
+    "NUDE_FEMALE_CHEST",
+    "NUDE_MALE_CHEST",  # If you want to block male chest also
+    "MALE_BREAST_EXPOSED",
+
+    # Buttocks Exposure
     "BUTTOCKS_EXPOSED",
-    # If you also want to block male chest, uncomment:
-    # "MALE_BREAST_EXPOSED",
+    "FEMALE_BUTTOCKS_EXPOSED",
+    "MALE_BUTTOCKS_EXPOSED",
+
+    # Sexual Activity
+    "SEXUAL_ACTIVITY",
+    "SEX_ACT",
+    "SEXUAL_INTERCOURSE",
+    "MASTURBATION",
+    "ORAL_SEX",
+    "ANAL_SEX",
+
+    # Pornographic Content
+    "PORNOGRAPHIC",
+    "SEXUALIZED_NUDITY",
+    "EXPLICIT_NUDITY",
+    "ADULT_CONTENT",
+
+    # Suggestive Content
+    "PARTIALLY_NUDE",
+    "LINGERIE",
+    "BIKINI",
+    "SEXY_POSE",
+    "SEXUAL_INTENT",
+
+    # Child Safety (Extremely Important)
+    "MINOR_NUDITY",
+    "CHILD_NUDITY",
+    "CSAM_SUSPECT",  # Child sexual abuse material (must hard-block)
+
+    # Other Explicit / NSFW Flags
+    "HARDCORE",
+    "SOFTCORE",
+    "LEWD_CONTENT",
+    "OBSCENE_CONTENT",
+    "INAPPROPRIATE_CONTENT",
+    "ADULT_TOY",
+    "SEX_TOY",
+    "FETISH_CONTENT",
 }
+
 
 
 # -------------------------------------------------
