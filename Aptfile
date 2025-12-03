@@ -1,5 +1,4 @@
 # ===== FFmpeg & multimedia =====
-ffmpeg
 libavcodec-extra
 libavformat-extra
 libswscale-extra
