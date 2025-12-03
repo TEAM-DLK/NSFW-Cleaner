@@ -16,14 +16,16 @@ libtiff-dev
 libsm6
 libxext6
 libxrender1
-libgl1-mesa-glx
+libgl1-mesa-dri
+libglx-mesa0
+libglvnd0
 libglib2.0-0
 
 # ===== MediaPipe dependencies =====
 libprotobuf-dev
 protobuf-compiler
 
-# ===== NUnit / Clip / Torch optional acceleration =====
+# ===== Optional acceleration =====
 libopenblas-dev
 liblapack-dev
 
