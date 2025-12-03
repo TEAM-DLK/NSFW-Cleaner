@@ -1,90 +1,17 @@
-# ======================================
-# 🔐 DO NOT COPY SECRETS
-# ======================================
-.env
-*.env
-secrets.json
-credentials.json
-config.yml
-config.json
-token.txt
-
-
-# ======================================
-# 🧠 AI / MODEL WEIGHTS (heavy files)
-# ======================================
-models/
-model/
-*.pt
-*.pth
-*.onnx
-*.bin
-*.ckpt
-
-
-# ======================================
-# 🗂 PYTHON ARTIFACTS
-# ======================================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.so
+.Python
+env/
+venv/
+build/
+dist/
+.eggs/
 *.egg-info/
 *.egg
-dist/
-build/
-pip-wheel-metadata/
-.wheels/
-.eggs/
-
-
-# ======================================
-# 🖼 MEDIA USED FOR NSFW SCANNING
-# ======================================
-tmp/
-temp/
-*.tmp
-*.cache
-cache/
-downloads/
-ffmpeg_temp/
-scan_results/
-frames/
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.webp
-*.mp4
-*.mov
-*.avi
-*.mkv
-*.tgs
-
-
-# ======================================
-# 📢 LOG FILES
-# ======================================
 *.log
-log/
-logs/
-*.pid
-
-
-# ======================================
-# 🖥 DEVELOPMENT / OS FILES
-# ======================================
 .DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.swp
-*.swo
-
-
-# ======================================
-# 🛠 DOCKER / DEV
-# ======================================
-docker-compose.yml
-Dockerfile.dev
+.git
+.gitignore
+.env
