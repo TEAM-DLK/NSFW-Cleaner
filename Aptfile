@@ -1,6 +1,33 @@
-libwebp-dev
-libwebpmux3
-libwebpdemux2
+# ===== FFmpeg & multimedia =====
+ffmpeg
+libavcodec-extra
+libavformat-extra
+libswscale-extra
+libavdevice-dev
+libavfilter-extra
+
+# ===== Image processing libs =====
 libjpeg-dev
-zlib1g-dev
 libpng-dev
+libwebp-dev
+libtiff-dev
+
+# ===== OpenCV required system libs =====
+libsm6
+libxext6
+libxrender1
+libgl1-mesa-glx
+libglib2.0-0
+
+# ===== MediaPipe dependencies =====
+libprotobuf-dev
+protobuf-compiler
+
+# ===== NUnit / Clip / Torch optional acceleration =====
+libopenblas-dev
+liblapack-dev
+
+# ===== General utilities =====
+wget
+curl
+unzip
