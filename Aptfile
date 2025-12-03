@@ -1,35 +1,6 @@
-# ===== FFmpeg & multimedia =====
-libavcodec-extra
-libavformat-extra
-libswscale7
-libswscale-dev
-libavdevice-dev
-libavfilter-extra
-
-# ===== Image processing libs =====
-libjpeg-dev
-libpng-dev
 libwebp-dev
-libtiff-dev
-
-# ===== OpenCV required system libs =====
-libsm6
-libxext6
-libxrender1
-libgl1-mesa-dri
-libglx-mesa0
-libglvnd0
-libglib2.0-0
-
-# ===== MediaPipe dependencies =====
-libprotobuf-dev
-protobuf-compiler
-
-# ===== Optional acceleration =====
-libopenblas-dev
-liblapack-dev
-
-# ===== General utilities =====
-wget
-curl
-unzip
+libwebpmux3
+libwebpdemux2
+libjpeg-dev
+zlib1g-dev
+libpng-dev
