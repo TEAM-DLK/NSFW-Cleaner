@@ -1,12 +1,8 @@
-pyrogram==2.0.106
-tgcrypto==1.2.5
-
-pymongo==4.6.1
-python-dotenv==1.0.0
-
-Pillow==10.2.0
-lottie==0.7.2
-
-opencv-python-headless==4.10.0.84
-
-# nudenet and mediapipe removed from core (move to optional)
+pyrogram
+tgcrypto
+python-dotenv
+pymongo
+dnspython
+nudenet
+lottie
+pillow
