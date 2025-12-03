@@ -1,47 +1,118 @@
 {
-  "name": "NSFW Guard Bot",
-  "description": "A Telegram NSFW guard bot using Pyrogram and NudeNet",
-  "repository": "https://github.com/yourusername/yourrepo",
-  "keywords": ["telegram", "bot", "nsfw", "pyrogram", "heroku"],
+  "name": "DLK-NSFW-Cleaner",
+  "description": "DLK NSFW Cleaner — Multi-model NSFW detection bot using NudeNet, CLIP, MediaPipe, Yahoo Stub, MongoDB, and Pyrogram.",
+  "repository": "https://github.com/TEAM-DLK/DLK-NSFW-Cleaner",
+  "logo": "https://i.ibb.co/WNzKw5qk/DLKNSFWCleaner.png",
+  "keywords": ["telegram", "bot", "ai", "nsfw", "pyrogram", "nudenet", "clip", "mediapipe"],
+  "stack": "heroku-24",
+
+  "buildpacks": [
+    { "url": "heroku/python" },
+    { "url": "https://github.com/heroku/heroku-buildpack-activestorage-preview" },
+    { "url": "https://github.com/heroku/heroku-buildpack-apt" }
+  ],
+
   "env": {
     "API_ID": {
-      "description": "Get this from https://my.telegram.org/apps",
+      "description": "Your Telegram API ID",
+      "value": "",
       "required": true
     },
     "API_HASH": {
-      "description": "Get this from https://my.telegram.org/apps",
+      "description": "Your Telegram API HASH",
+      "value": "",
       "required": true
     },
     "BOT_TOKEN": {
-      "description": "Your Telegram bot token from @BotFather",
+      "description": "Telegram Bot Token from @BotFather",
+      "value": "",
       "required": true
     },
+
     "MONGO_URI": {
-      "description": "Your MongoDB connection URI",
+      "description": "MongoDB connection string (from MongoDB Atlas / Cluster)",
+      "value": "",
       "required": true
     },
+
     "NSFW_THRESHOLD": {
-      "description": "Threshold for NSFW detection (default 0.75)",
+      "description": "NSFW detection threshold (0.60 - 0.90 recommended)",
+      "value": "0.72",
       "required": false
     },
+
     "NSFW_STICKER_LIMIT": {
-      "description": "Number of NSFW stickers before mute (default 3)",
+      "description": "How many NSFW violations before mute",
+      "value": "3",
       "required": false
     },
+
+    "PACK_STICKER_LIMIT": {
+      "description": "Pack blacklist violation count",
+      "value": "3",
+      "required": false
+    },
+
     "MUTE_DURATION_SECONDS": {
-      "description": "Mute duration in seconds (default 86400 = 1 day)",
+      "description": "Auto-mute duration for violators (86400 = 24h)",
+      "value": "86400",
       "required": false
     },
+
+    "YAHOO_WEIGHT": {
+      "description": "Enable or disable Yahoo NSFW model (0 = off)",
+      "value": "0.5",
+      "required": false
+    },
+    "CLIP_WEIGHT": {
+      "description": "CLIP model weight (0 = disable CLIP)",
+      "value": "0.7",
+      "required": false
+    },
+    "POSE_WEIGHT": {
+      "description": "MediaPipe sexual pose classifier weight",
+      "value": "0.5",
+      "required": false
+    },
+    "NUDENET_WEIGHT": {
+      "description": "Main NudeNet scoring weight",
+      "value": "1.0",
+      "required": false
+    },
+
     "LOG_CHAT_ID": {
-      "description": "Telegram Chat ID for admin logs",
+      "description": "Chat ID for bot logs (optional)",
+      "value": "",
+      "required": false
+    },
+    "OWNER_IDS": {
+      "description": "Admin/Owner Telegram IDs (comma-separated)",
+      "value": "",
+      "required": false
+    },
+
+    "START_PHOTO_URL": {
+      "description": "Start command banner image",
+      "value": "https://i.ibb.co/WNzKw5qk/DLKNSFWCleaner.png",
+      "required": false
+    },
+
+    "OFFICIAL_CHANNEL": {
+      "description": "Your DLK Developer official channel",
+      "value": "https://t.me/DLKDevelopers",
+      "required": false
+    },
+    "LOG_PUBLIC_URL": {
+      "description": "Updates + Logs channel",
+      "value": "https://t.me/DOOZY_OFF",
       "required": false
     }
   },
+
   "formation": {
     "worker": {
       "quantity": 1,
-      "size": "ECO"
+      "size": "eco"
     }
-  },
-  "image": "heroku/python"
+  }
 }
