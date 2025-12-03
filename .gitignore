@@ -1,21 +1,112 @@
-.env
+# ======================================
+# 🔥 PYTHON GENERAL
+# ======================================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-.Python
-db.sqlite3
-instance/
-.pytest_cache/
-build/
-dist/
-.eggs/
-*.egg-info/
+*.so
 *.egg
+*.egg-info/
+dist/
+build/
+*.spec
+
+
+# ======================================
+# 🔐 ENVIRONMENT / SECRETS
+# ======================================
+.env
+*.env
+!example.env
+secrets.json
+credentials.json
+
+
+# ======================================
+# 📦 PACKAGES / DEPENDENCIES
+# ======================================
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+.wheels/
+.eggs/
+
+
+# ======================================
+# 🗂 LOGS / CACHE
+# ======================================
 *.log
 logs/
+log/
+*.pid
+
+# Pyrogram session file
+*.session
+*.session-journal
+
+
+# ======================================
+# 🖼 TEMP FILES / MODEL OUTPUT
+# ======================================
+tmp/
+temp/
+*.tmp
+*.temp
+*.cache
+.cache/
+cache/
+
+
+# ======================================
+# 🎥 MEDIA / DOWNLOADED SCAN FILES
+# ======================================
+downloads/
+scan_results/
+frames/
+ffmpeg_temp/
+*.webp
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.tgs
+
+
+# ======================================
+# 🧠 MACHINE LEARNING MODELS
+# NudeNet, CLIP, Yahoo, or MP Pose cached weights
+# ======================================
+models/
+model/
+*.pt
+*.pth
+*.bin
+*.onnx
+*.ckpt
+
+
+# ======================================
+# 📁 OS / EDITOR FILES
+# ======================================
 .DS_Store
+Thumbs.db
 .vscode/
 .idea/
-test_results/
-*.lottie
+*.swp
+*.swo
+
+
+# ======================================
+# 🛠 HEROKU BUILDPACK TEMP FILES
+# ======================================
+.heroku/
+apt/
+packages/
+.ffmpeg/
