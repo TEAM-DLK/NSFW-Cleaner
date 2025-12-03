@@ -7,22 +7,6 @@ python-dotenv==1.0.0
 Pillow==10.2.0
 lottie==0.7.2
 
-# Optional but highly recommended (NudeNet)
-nudenet==3.0.8
-
-# MediaPipe (pose detection)
-mediapipe==0.10.10
-
-# For video frame extraction
 opencv-python-headless==4.10.0.84
 
-# FFmpeg must exist in system, not pip
-# Heroku buildpack handles ffmpeg
-
-# Optional CLIP model (needs Torch)
-git+https://github.com/openai/CLIP.git
-torch==2.2.2
-torchvision==0.17.2
-
-# Optional Yahoo NSFW wrapper (if you have it)
-# yahoo-nsfw==1.0.0
+# nudenet and mediapipe removed from core (move to optional)
