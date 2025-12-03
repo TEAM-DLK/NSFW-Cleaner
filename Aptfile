@@ -1,8 +1,8 @@
 # ===== FFmpeg & multimedia =====
-ffmpeg
 libavcodec-extra
 libavformat-extra
-libswscale-extra
+libswscale7
+libswscale-dev
 libavdevice-dev
 libavfilter-extra
 
