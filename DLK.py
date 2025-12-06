@@ -47,13 +47,13 @@ API_ID = int(os.getenv("API_ID", "0") or 0)
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.75"))
+NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.30"))
 
-NSFW_STICKER_LIMIT = int(os.getenv("NSFW_STICKER_LIMIT", "3"))
+NSFW_STICKER_LIMIT = int(os.getenv("NSFW_STICKER_LIMIT", "2"))
 PACK_STICKER_LIMIT = int(os.getenv("PACK_STICKER_LIMIT", str(NSFW_STICKER_LIMIT)))
 MUTE_DURATION_SECONDS = int(os.getenv("MUTE_DURATION_SECONDS", "86400"))
 CONFIRM_MSG_DELETE_SECONDS = int(os.getenv("CONFIRM_MSG_DELETE_SECONDS", "20"))
-DELETE_LOG_MESSAGE_SECONDS = int(os.getenv("DELETE_LOG_MESSAGE_SECONDS", "5"))
+DELETE_LOG_MESSAGE_SECONDS = int(os.getenv("DELETE_LOG_MESSAGE_SECONDS", "20"))
 
 MONGO_URI = os.getenv("MONGO_URI", "").strip()
 if not MONGO_URI:
