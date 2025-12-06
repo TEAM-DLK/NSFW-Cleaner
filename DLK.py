@@ -1,8 +1,8 @@
-# DLK NSFW Cleaner - FULL CLEAN FINAL FILE
-# Changes vs previous:
-# - /free now whitelists the WHOLE STICKER PACK for that chat (no more deletes from that pack)
-# - Added per-chat PACK WHITELIST (overrides blacklist & scanning)
-# - When a user is muted, bot also sends PRIVATE logs to group owner & key admins
+# DLK NSFW Cleaner - FULL CLEAN FINAL FILE (LOGS PER-GROUP ADMINS ONLY)
+# - /free whitelists the WHOLE STICKER PACK for that chat
+# - Per-chat PACK WHITELIST (overrides blacklist & scanning)
+# - When a user is muted, bot sends PRIVATE logs to group owner & key admins
+# - No mute logs go to LOG_CHAT_ID channel
 # - Start / Help UI simplified and more step-by-step
 # - All previous flows (/free, /unfree, /blockpack, detector, etc.) kept working
 
@@ -60,7 +60,8 @@ if not MONGO_URI:
     raise SystemExit("MONGO_URI is not set in environment. Set it in your .env file.")
 
 LOG_CHAT_ID_ENV = os.getenv("LOG_CHAT_ID", "").strip()
-LOG_CHAT_ID = LOG_CHAT_ID_ENV if LOG_CHAT_ID_ENV else None  # still used for delete logs
+# Reserved for future use; current file does NOT send mute logs to this channel
+LOG_CHAT_ID = LOG_CHAT_ID_ENV if LOG_CHAT_ID_ENV else None
 
 OWNER_IDS = set()
 owner_env = os.getenv("OWNER_IDS", "").strip()
@@ -586,7 +587,7 @@ async def delete_nsfw_message(client: Client, message: Message, score: float):
     except Exception as e:
         log.warning(f"Failed in delete_nsfw_message: {e}")
 
-    # in-chat log + optional LOG_CHAT_ID
+    # In-chat log only (NO LOG CHANNEL)
     try:
         reason = f"NSFW detection score {score:.2f} >= threshold {NSFW_THRESHOLD}"
         mention = user.mention if user else "<b>Anonymous / Unknown</b>"
@@ -614,11 +615,6 @@ async def delete_nsfw_message(client: Client, message: Message, score: float):
         sent = await safe_send_message(client, chat.id, text, reply_markup=kb, thread_id=thread_id)
         if sent:
             asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
-        if LOG_CHAT_ID:
-            try:
-                await client.send_message(LOG_CHAT_ID, text, reply_markup=kb)
-            except Exception:
-                pass
     except Exception as e:
         log.warning(f"Failed to send in-chat log message: {e}")
 
@@ -1361,9 +1357,18 @@ async def send_private_mute_log(client: Client, chat_id: int, user, violations: 
     if not recipients:
         return
 
+    # try to get chat title
+    chat_title = str(chat_id)
+    try:
+        chat = await client.get_chat(chat_id)
+        if chat and getattr(chat, "title", None):
+            chat_title = chat.title
+    except Exception:
+        pass
+
     text = (
         "🚫 <b>User muted for NSFW</b>\n\n"
-        f"👥 Chat ID: <code>{chat_id}</code>\n"
+        f"👥 Chat: <code>{chat_title}</code> (<code>{chat_id}</code>)\n"
         f"👤 User: {user.mention}\n"
         f"🆔 User ID: <code>{user.id}</code>\n"
         f"📊 Last Score: <code>{score:.2f}</code>\n"
@@ -1411,7 +1416,7 @@ async def notify_mute_to_log(client: Client, chat_id: int, user, violations: int
         if sent:
             asyncio.create_task(schedule_delete(sent, DELETE_LOG_MESSAGE_SECONDS))
 
-        # also send private logs to owner + key admins
+        # also send private logs to owner + key admins (bot inbox -> admins)
         if user:
             await send_private_mute_log(client, chat_id, user, violations, score, reason, kb)
     except Exception as e:
