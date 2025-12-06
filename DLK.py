@@ -78,7 +78,7 @@ LOG_PUBLIC_URL = "https://t.me/DOOZY_OFF"
 START_PHOTO_URL = "https://i.ibb.co/WNzKw5qk/DLKNSFWCleaner.png"
 
 DEV_ABOUT_TEXT = (
-    "DLK DEVELOPER\n"
+    "\nDLK DEVELOPER\n"
     "SEE THE FUTURE THROUGH MY VISION"
 )
 
@@ -676,9 +676,9 @@ def get_main_text() -> str:
         "• Can block or allow entire sticker packs per chat\n"
         f"• Mutes users after <b>{NSFW_STICKER_LIMIT}</b> NSFW violations (non-admins)\n\n"
         "<b>Quick start:</b>\n"
-        "1️⃣ Add me to your group\n"
-        "2️⃣ Make me admin (delete + ban/restrict)\n"
-        "3️⃣ I start auto-cleaning NSFW content\n\n"
+        "① Add me to your group\n"
+        "② Make me admin (delete + ban/restrict)\n"
+        "③ I start auto-cleaning NSFW content\n\n"
         f"⏱ Uptime: <code>{uptime}</code>\n\n"
         "Use the buttons below to see how to use, setup and commands."
     )
@@ -687,11 +687,11 @@ def get_main_text() -> str:
 def get_how_text() -> str:
     return (
         "📖 <b>How to use</b>\n\n"
-        "1️⃣ Add the bot to your group\n"
-        "2️⃣ Promote as admin with:\n"
+        "① Add the bot to your group\n"
+        "② Promote as admin with:\n"
         "   • Delete messages\n"
         "   • Ban/Restrict users\n\n"
-        "3️⃣ The bot will now:\n"
+        "③ The bot will now:\n"
         "   • Scan new stickers/photos/GIFs/videos\n"
         "   • Delete explicit NSFW content\n"
         "   • Auto-mute repeat NSFW senders\n\n"
@@ -706,8 +706,6 @@ def get_how_text() -> str:
 def get_features_text() -> str:
     return (
         "🧰 <b>Commands & Features</b>\n\n"
-        "• /start – main panel + buttons\n"
-        "• /help – same as /start\n"
         "• /about – about the bot\n"
         "• /status – show my admin permissions in this group\n"
         "• /ping – bot uptime\n\n"
@@ -967,9 +965,9 @@ async def free_cmd(client: Client, message: Message):
         try:
             grp_msg = await message.reply_text(
                 "✅ Whitelist request created.\n\n"
-                "1️⃣ Click the button to open my private chat\n"
-                "2️⃣ Send the sticker from the pack you want to allow\n"
-                "3️⃣ Press Confirm in PM\n\n"
+                "① Click the button to open my private chat\n"
+                "② Send the sticker from the pack you want to allow\n"
+                "③ Press Confirm in PM\n\n"
                 "The sticker's pack will be allowed only in this group.",
                 reply_markup=confirm_kb_group,
                 quote=True,
@@ -1063,9 +1061,9 @@ async def blockpack_cmd(client: Client, message: Message):
     try:
         grp_msg = await message.reply_text(
             "📦 <b>Bulk block sticker packs</b>\n\n"
-            "1️⃣ Click the button to open my private chat\n"
-            "2️⃣ Send stickers from the pack(s) you want to block\n"
-            "3️⃣ When finished, send <b>DONE</b>\n\n"
+            "① Click the button to open my private chat\n"
+            "② Send stickers from the pack(s) you want to block\n"
+            "③ When finished, send <b>DONE</b>\n\n"
             "I will block those packs only for this chat.",
             reply_markup=kb,
             quote=True,
