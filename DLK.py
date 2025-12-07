@@ -1,11 +1,3 @@
-# DLK NSFW Cleaner - FULL CLEAN FINAL FILE (LOGS PER-GROUP ADMINS ONLY)
-# - /free whitelists the WHOLE STICKER PACK for that chat
-# - Per-chat PACK WHITELIST (overrides blacklist & scanning)
-# - When a user is muted, bot sends PRIVATE logs to group owner & key admins
-# - No mute logs go to LOG_CHAT_ID channel
-# - Start / Help UI simplified and more step-by-step
-# - All previous flows (/free, /unfree, /blockpack, detector, etc.) kept working
-
 import os
 import time
 import logging
@@ -1766,5 +1758,5 @@ async def callback_handler(client: Client, query: CallbackQuery):
 # Start the bot
 # -------------------------------------------------
 if __name__ == "__main__":
-    log.info("Starting DLK NSFW Cleaner (FULL CLEAN FINAL FILE).")
+    log.info("Starting DLK NSFW Cleaner.")
     app.run()
